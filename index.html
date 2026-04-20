@@ -813,9 +813,10 @@ function handleSubmit(e) {
   showSuccessScreen(record, 'syncing');
   showSuccessModal();
 
-  // ─ Enviar al webhook — incluye thumbnail como photoData (base64 160px) ─
+  // ─ Enviar al webhook — photoData=thumbnail (Sheet), photoFull=alta calidad (Drive) ─
   const payload = { ...record };
-  payload.photoData = payload.photoThumb || null;
+  payload.photoData = payload.photoThumb || null;  // thumbnail 160px → Sheet
+  payload.photoFull = currentPhoto.full   || null;  // 1600px 92% → Google Drive
   delete payload.photoThumb;
   // no-cors: GAS ejecuta doPost() antes de devolver el 302 redirect
   // El body llega completo aunque la respuesta sea opaca
@@ -850,6 +851,7 @@ async function refreshDashboard() {
           retiro:     row.retiro     || '',
           photoName:  row.photoName  || '',
           photoThumb: row.photoData  || null,  // base64 guardado en Sheet
+          photoUrl:   row.photoUrl   || null,  // URL Google Drive (descarga real)
         })).filter(r => r.local);
         saveLocal();
         showToast(`✅ ${registros.length} registro(s) cargados desde Sheets`, '#2a8703');
@@ -887,8 +889,10 @@ function renderTable() {
         ? `<div class="flex items-center gap-1.5">
             <img src="${r.photoThumb}" class="w-10 h-10 object-cover rounded-lg border cursor-zoom-in flex-shrink-0"
                  onclick="lightbox('${r.photoThumb}','${esc(r.photoName)}')" title="Click para ampliar" />
-            <a href="${r.photoThumb}" download="${esc(r.photoName)||'foto.jpg'}"
-               class="text-wb hover:text-blue-700 text-base" title="Descargar">⬇️</a>
+            <a href="${r.photoUrl || r.photoThumb}" download="${esc(r.photoName)||'foto.jpg'}"
+               ${r.photoUrl ? '' : ''}
+               target="${r.photoUrl ? '_blank' : '_self'}"
+               class="text-wb hover:text-blue-700 text-base" title="Descargar en alta calidad">⬇️</a>
           </div>`
         : '<span class="text-gray-300">—</span>'}</td>
       <td class="px-2 py-1.5 text-gray-400 whitespace-nowrap text-[10px]">${r.fecha}</td>
@@ -1069,18 +1073,28 @@ function processFile(file) {
   if (!file) return;
   if (!['image/jpeg', 'image/jpg', 'image/png'].includes(file.type))
     { showToast('❌ Solo .jpg / .jpeg / .png', '#ea1100'); return; }
-  if (file.size > 5 * 1024 * 1024)
-    { showToast('❌ La imagen supera 5 MB', '#ea1100'); return; }
+  if (file.size > 15 * 1024 * 1024)
+    { showToast('❌ La imagen supera 15 MB', '#ea1100'); return; }
   const reader = new FileReader();
   reader.onload = ev => {
     const img = new Image();
     img.onload = () => {
-      const MAX = 160, r = Math.min(MAX / img.width, MAX / img.height, 1);
-      const c = document.createElement('canvas');
-      c.width = img.width * r; c.height = img.height * r;
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-      currentPhoto = { name: file.name, size: file.size, thumb: c.toDataURL('image/jpeg', .75) };
-      document.getElementById('photoThumb').src = currentPhoto.thumb;
+      // ── Thumbnail 160px para preview rápido ──
+      const TMAX = 160, tr = Math.min(TMAX / img.width, TMAX / img.height, 1);
+      const tc = document.createElement('canvas');
+      tc.width = img.width * tr; tc.height = img.height * tr;
+      tc.getContext('2d').drawImage(img, 0, 0, tc.width, tc.height);
+      const thumb = tc.toDataURL('image/jpeg', 0.75);
+
+      // ── Full quality 1600px para descarga ──
+      const FMAX = 1600, fr = Math.min(FMAX / img.width, FMAX / img.height, 1);
+      const fc = document.createElement('canvas');
+      fc.width = Math.round(img.width * fr); fc.height = Math.round(img.height * fr);
+      fc.getContext('2d').drawImage(img, 0, 0, fc.width, fc.height);
+      const full = fc.toDataURL('image/jpeg', 0.92);
+
+      currentPhoto = { name: file.name, size: file.size, thumb, full };
+      document.getElementById('photoThumb').src = thumb;
       document.getElementById('photoName').textContent = file.name;
       document.getElementById('photoSize').textContent = fmtBytes(file.size);
       document.getElementById('photoPreview').classList.remove('hidden');
@@ -1128,11 +1142,18 @@ function flashDrop() {
   target.style.borderRadius = '.6rem';
   setTimeout(() => { target.style.outline = ''; target.style.borderRadius = ''; }, 2500);
 }
-function lightbox(src, name) {
-  const lb = document.createElement('div');
-  lb.className = 'fixed inset-0 bg-black/85 flex flex-col items-center justify-center z-[200] cursor-zoom-out p-4';
-  lb.innerHTML = `<img src="${src}" class="max-w-full max-h-[82vh] rounded-xl shadow-2xl object-contain" /><p class="text-white text-xs mt-3 font-mono opacity-70">${name}</p>`;
-  lb.onclick   = () => document.body.removeChild(lb);
+function lightbox(src, name, hqUrl) {
+  const lb  = document.createElement('div');
+  const img = hqUrl || src; // Drive URL si existe, si no el base64
+  lb.className = 'fixed inset-0 bg-black/85 flex flex-col items-center justify-center z-[200] cursor-zoom-out p-4 gap-3';
+  lb.innerHTML = `
+    <img src="${img}" class="max-w-full max-h-[78vh] rounded-xl shadow-2xl object-contain" />
+    <p class="text-white text-xs font-mono opacity-70">${name}</p>
+    ${hqUrl ? `<a href="${hqUrl}" download="${name}" target="_blank"
+         onclick="event.stopPropagation()"
+         class="bg-wb hover:bg-blue-700 text-white text-sm font-bold px-5 py-2 rounded-xl">
+         ⬇️ Descargar alta calidad</a>` : ''}`;  
+  lb.onclick = () => document.body.removeChild(lb);
   document.body.appendChild(lb);
 }
 function openConfirm(title, msg, cb) {
