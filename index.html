@@ -321,7 +321,7 @@
 // Pega este código en Extensiones &gt; Apps Script
 // ══════════════════════════════════════════════
 const SHEET_NAME = 'Respuestas';
-const HEADERS    = ['ID','Fecha','Local','Nombre','Estacionamientos','N\u00b0 Est.','Gr\u00e1fica','Retiro','Foto'];
+const HEADERS    = ['ID','Fecha','Local','Nombre','Estacionamientos','N\u00b0 Est.','Gr\u00e1fica','Retiro','Foto','Foto (thumb)'];
 
 function doPost(e) {
   try {
@@ -337,7 +337,8 @@ function doPost(e) {
     sheet.appendRow([
       data.id || '',  data.fecha || '',   data.local || '',
       data.nombre || '', data.estac || '', data.numEst || 0,
-      data.grafica || '', data.retiro || '', data.photoName || ''
+      data.grafica || '', data.retiro || '', data.photoName || '',
+      data.photoData || ''  // thumbnail base64 160px
     ]);
     return out({ok: true});
   } catch(err) { return out({ok:false, error:err.message}); }
@@ -362,7 +363,7 @@ function doGet(e) {
           local: String(o['Local']||''), nombre: String(o['Nombre']||''),
           estac: String(o['Estacionamientos']||''), numEst: Number(o['N\u00b0 Est.']||0),
           grafica: String(o['Gr\u00e1fica']||''), retiro: String(o['Retiro']||''),
-          photoName: String(o['Foto']||''), photoThumb: null
+          photoName: String(o['Foto']||''), photoData: String(o['Foto (thumb)']||'')
         };
       });
       return out(data);
@@ -813,21 +814,27 @@ function handleSubmit(e) {
   showSuccessScreen(record, 'syncing');
   showSuccessModal();
 
-  // ─ Enviar al webhook — photoData=thumbnail (Sheet), photoFull=alta calidad (Drive) ─
+  // ─ Enviar al webhook — solo photoData (thumbnail 160px) → liviano y rápido ─
+  // photoFull NO se envía: es ~800KB base64 que no cabe en GAS y deja el form pegado
   const payload = { ...record };
   payload.photoData = payload.photoThumb || null;  // thumbnail 160px → Sheet
-  payload.photoFull = currentPhoto.full   || null;  // 1600px 92% → Google Drive
   delete payload.photoThumb;
-  // no-cors: GAS ejecuta doPost() antes de devolver el 302 redirect
-  // El body llega completo aunque la respuesta sea opaca
+
+  const ctrl = new AbortController();
+  const tid  = setTimeout(() => ctrl.abort(), 15000); // 15s máx — después resuelve OK igual
   fetch(cfg.webhookUrl, {
     method:  'POST',
     mode:    'no-cors',
     body:    JSON.stringify(payload),
     headers: { 'Content-Type': 'text/plain' },
+    signal:  ctrl.signal,
   })
-  .then(() => updateSyncStatus('ok'))
-  .catch(() => updateSyncStatus('error'));
+  .then(() => { clearTimeout(tid); updateSyncStatus('ok'); })
+  .catch(err => {
+    clearTimeout(tid);
+    // AbortError = timeout de 15s; datos ya guardados localmente → igual OK
+    updateSyncStatus(err.name === 'AbortError' ? 'ok' : 'error');
+  });
 }
 
 /* ─── Dashboard ─── */
