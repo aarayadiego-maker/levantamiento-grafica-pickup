@@ -888,7 +888,7 @@ function renderTable() {
       <td class="px-2 py-1.5">${r.photoThumb
         ? `<div class="flex items-center gap-1.5">
             <img src="${r.photoThumb}" class="w-10 h-10 object-cover rounded-lg border cursor-zoom-in flex-shrink-0"
-                 onclick="lightbox('${r.photoThumb}','${esc(r.photoName)}')" title="Click para ampliar" />
+                 onclick="lightbox('${r.photoThumb}','${esc(r.photoName)}','${r.photoUrl||''}')" title="Click para ampliar" />
             <a href="${r.photoUrl || r.photoThumb}" download="${esc(r.photoName)||'foto.jpg'}"
                ${r.photoUrl ? '' : ''}
                target="${r.photoUrl ? '_blank' : '_self'}"
