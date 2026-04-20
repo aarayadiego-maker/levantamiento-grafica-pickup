@@ -566,7 +566,7 @@ function checkNoBase() {
 function checkWebhookBanner() {
   document.getElementById('noWebhookBanner').classList.toggle('hidden', !!cfg.webhookUrl);
   // Ocultar el formulario si no hay webhook
-  const frm = document.getElementById('frmLev');
+  const frm = document.getElementById('popForm');
   const suc = document.getElementById('successScreen');
   if (frm && !suc.classList.contains('hidden')) return; // no interferir con pantalla de éxito
   if (frm) frm.classList.toggle('hidden', !cfg.webhookUrl);
@@ -941,7 +941,7 @@ function exportToExcel() {
 let _currentCode = '';
 
 function showSuccessScreen(record, syncState) {
-  document.getElementById('frmLev').classList.add('hidden');
+  document.getElementById('popForm').classList.add('hidden');
   document.getElementById('successScreen').classList.remove('hidden');
 
   // Resumen
@@ -989,7 +989,7 @@ function copyResponseCode() {
 
 function resetForNewSubmit() {
   document.getElementById('successScreen').classList.add('hidden');
-  document.getElementById('frmLev').classList.remove('hidden');
+  document.getElementById('popForm').classList.remove('hidden');
   document.getElementById('fLocal').focus();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -1035,7 +1035,7 @@ function generateHTML() {
   document.getElementById('tabpane-dash').classList.remove('active');
   document.getElementById('tabpane-form').classList.add('active');
   document.getElementById('successScreen').classList.add('hidden');
-  document.getElementById('frmLev').classList.remove('hidden');
+  document.getElementById('popForm').classList.remove('hidden');
   // ─ Asegurarse que adminLoginBtns es visible y adminPanel oculto para el próximo usuario ─
   document.getElementById('adminLoginBtns').classList.remove('hidden');
   const ap = document.getElementById('adminPanel'); if (ap) ap.classList.add('hidden');
