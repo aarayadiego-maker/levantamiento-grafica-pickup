@@ -846,6 +846,15 @@ async function refreshDashboard() {
 
   if (cfg.webhookUrl) {
     try {
+      // Preservar photoUrl (1600px base64) de registros locales antes de sobreescribir.
+      // refreshDashboard() reemplaza registros[] con los del Sheet (que no tienen Drive URL),
+      // lo que borraba el 1600px guardado en localStorage al hacer saveLocal().
+      const prevByLocal = new Map(
+        (JSON.parse(localStorage.getItem(LS_REC) || '[]'))
+          .filter(r => r.local && r.photoUrl)
+          .map(r => [String(r.local).trim(), r.photoUrl])
+      );
+
       // Siempre cargar 100% desde Google Sheets — fuente de verdad única
       const res    = await fetch(`${cfg.webhookUrl}?action=list`, { cache: 'no-store' });
       const remote = await res.json();
@@ -860,8 +869,9 @@ async function refreshDashboard() {
           grafica:    row.grafica    || '',
           retiro:     row.retiro     || '',
           photoName:  row.photoName  || '',
-          photoThumb: row.photoData  || null,  // base64 guardado en Sheet
-          photoUrl:   row.photoUrl   || null,  // URL Google Drive (descarga real)
+          photoThumb: row.photoData  || null,  // 250px del Sheet
+          // Preferir: Drive URL del Sheet > 1600px local > null
+          photoUrl:   row.photoUrl   || prevByLocal.get(String(row.local || '').trim()) || null,
         })).filter(r => r.local);
         saveLocal();
         showToast(`✅ ${registros.length} registro(s) cargados desde Sheets`, '#2a8703');
