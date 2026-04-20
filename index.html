@@ -813,8 +813,9 @@ function handleSubmit(e) {
   showSuccessScreen(record, 'syncing');
   showSuccessModal();
 
-  // ─ Enviar al webhook (sin el thumb para ahorrar bandwidth) ─
+  // ─ Enviar al webhook — incluye thumbnail como photoData (base64 160px) ─
   const payload = { ...record };
+  payload.photoData = payload.photoThumb || null;
   delete payload.photoThumb;
   // no-cors: GAS ejecuta doPost() antes de devolver el 302 redirect
   // El body llega completo aunque la respuesta sea opaca
@@ -848,7 +849,7 @@ async function refreshDashboard() {
           grafica:    row.grafica    || '',
           retiro:     row.retiro     || '',
           photoName:  row.photoName  || '',
-          photoThumb: null,
+          photoThumb: row.photoData  || null,  // base64 guardado en Sheet
         })).filter(r => r.local);
         saveLocal();
         showToast(`✅ ${registros.length} registro(s) cargados desde Sheets`, '#2a8703');
@@ -883,7 +884,12 @@ function renderTable() {
     tr.className = 'hover:bg-blue-50 transition-colors';
     tr.innerHTML = `
       <td class="px-2 py-1.5">${r.photoThumb
-        ? `<img src="${r.photoThumb}" class="w-10 h-10 object-cover rounded-lg border cursor-zoom-in" onclick="lightbox('${r.photoThumb}','${esc(r.photoName)}')" />`
+        ? `<div class="flex items-center gap-1.5">
+            <img src="${r.photoThumb}" class="w-10 h-10 object-cover rounded-lg border cursor-zoom-in flex-shrink-0"
+                 onclick="lightbox('${r.photoThumb}','${esc(r.photoName)}')" title="Click para ampliar" />
+            <a href="${r.photoThumb}" download="${esc(r.photoName)||'foto.jpg'}"
+               class="text-wb hover:text-blue-700 text-base" title="Descargar">⬇️</a>
+          </div>`
         : '<span class="text-gray-300">—</span>'}</td>
       <td class="px-2 py-1.5 text-gray-400 whitespace-nowrap text-[10px]">${r.fecha}</td>
       <td class="px-2 py-1.5 font-bold">${esc(r.local)}</td>
