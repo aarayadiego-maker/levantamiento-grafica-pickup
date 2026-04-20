@@ -58,7 +58,7 @@
   </div>
   <div class="max-w-4xl mx-auto px-4 flex gap-1">
     <button onclick="switchTab('form')" id="tab-form" class="tab-btn px-5 py-2.5 rounded-t-lg font-semibold text-sm bg-white text-wb" style="min-height:44px">📋 Formulario</button>
-    <button onclick="switchTab('dash')" id="tab-dash" class="tab-btn px-5 py-2.5 rounded-t-lg font-semibold text-sm bg-blue-700 text-blue-200 hover:bg-blue-600 hidden" style="min-height:44px">📊 Dashboard <span id="liveDot" class="hidden ml-1 inline-block w-2 h-2 bg-green-400 rounded-full animate-pulse"></span></button>
+    <button onclick="switchTab('dash')" id="tab-dash" class="tab-btn px-5 py-2.5 rounded-t-lg font-semibold text-sm bg-blue-700 text-blue-200 hover:bg-blue-600 hidden" style="min-height:44px">📊 Dashboard</button>
   </div>
 </header>
 
@@ -534,7 +534,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /* ─── Tabs ─── */
-let _dashInterval = null;
+
 
 function switchTab(tab) {
   if (tab === 'dash' && !isAdmin) { showToast('🔒 Solo para administradores', '#ea1100'); return; }
@@ -547,17 +547,7 @@ function switchTab(tab) {
   const btn = document.getElementById('tab-' + tab);
   btn.classList.add('bg-white','text-wb');
   btn.classList.remove('bg-blue-700','text-blue-200');
-  if (tab === 'dash') {
-    refreshDashboard();
-    if (!_dashInterval) {
-      _dashInterval = setInterval(refreshDashboard, 30000); // cada 30s
-      const dot = document.getElementById('liveDot');
-      if (dot) dot.classList.remove('hidden');
-    }
-  } else {
-    clearInterval(_dashInterval);
-    _dashInterval = null;
-  }
+  if (tab === 'dash') refreshDashboard();
 }
 
 function checkNoBase() {
