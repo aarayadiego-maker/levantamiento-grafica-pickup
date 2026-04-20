@@ -904,15 +904,16 @@ function renderTable() {
   data.forEach(r => {
     const tr = document.createElement('tr');
     tr.className = 'hover:bg-blue-50 transition-colors';
+    // IMPORTANTE: NO embeber base64 en atributos onclick — el browser los trunca.
+    // Se usa data-id y event delegation; la foto se busca en registros[] al clickear.
     tr.innerHTML = `
       <td class="px-2 py-1.5">${r.photoThumb
         ? `<div class="flex items-center gap-1.5">
-            <img src="${r.photoThumb}" class="w-10 h-10 object-cover rounded-lg border cursor-zoom-in flex-shrink-0"
-                 onclick="lightbox('${r.photoThumb}','${esc(r.photoName)}','${r.photoUrl||''}')" title="Click para ampliar" />
-            <a href="${r.photoUrl || r.photoThumb}" download="${esc(r.photoName)||'foto.jpg'}"
-               ${r.photoUrl ? '' : ''}
-               target="${r.photoUrl ? '_blank' : '_self'}"
-               class="text-wb hover:text-blue-700 text-base" title="Descargar en alta calidad">⬇️</a>
+            <img src="${r.photoThumb}"
+                 class="w-10 h-10 object-cover rounded-lg border cursor-zoom-in flex-shrink-0 zoom-img"
+                 data-id="${r.id}" title="Click para ampliar" />
+            <a href="#" class="text-wb hover:text-blue-700 text-base dl-img" data-id="${r.id}"
+               title="Descargar en alta calidad">⬇️</a>
           </div>`
         : '<span class="text-gray-300">—</span>'}</td>
       <td class="px-2 py-1.5 text-gray-400 whitespace-nowrap text-[10px]">${r.fecha}</td>
@@ -926,11 +927,49 @@ function renderTable() {
       <td class="px-2 py-1.5 text-[10px] text-gray-500 max-w-[100px] truncate" title="${esc(r.retiro)}">${r.retiro}</td>
       <td class="px-2 py-1.5 text-gray-400 max-w-[90px] truncate text-[10px]" title="${esc(r.photoName)}">${esc(r.photoName)}</td>
       <td class="px-2 py-1.5 text-center">
-        <button onclick="adminDelete(${r.id})" title="Eliminar" class="text-wr hover:text-red-700 text-lg leading-none">🗑</button>
+        <button class="del-btn text-wr hover:text-red-700 text-lg leading-none" data-id="${r.id}" title="Eliminar">🗑</button>
       </td>`;
     tbody.appendChild(tr);
   });
 }
+
+/* ─── Event delegation para tabla ───
+ * Centraliza todos los clicks de la tabla en un solo listener.
+ * Evita embeber base64 gigante en atributos onclick (el browser los trunca). */
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('registrosBody').addEventListener('click', e => {
+    // Lightbox — click en miniatura
+    const zoomEl = e.target.closest('.zoom-img');
+    if (zoomEl) {
+      const rec = registros.find(r => String(r.id) === zoomEl.dataset.id);
+      if (rec) lightbox(rec.photoThumb, rec.photoName, rec.photoUrl || null);
+      return;
+    }
+    // Descarga — click en botón ⬇️
+    const dlEl = e.target.closest('.dl-img');
+    if (dlEl) {
+      e.preventDefault();
+      const rec = registros.find(r => String(r.id) === dlEl.dataset.id);
+      if (!rec) return;
+      if (rec.photoUrl && rec.photoUrl.startsWith('http')) {
+        window.open(rec.photoUrl, '_blank');  // Drive URL — abrir en nueva pestaña
+      } else {
+        const a = document.createElement('a');
+        a.href = rec.photoUrl || rec.photoThumb;
+        a.download = rec.photoName || 'foto.jpg';
+        a.click();
+      }
+      return;
+    }
+    // Eliminar — click en botón 🗑
+    const delEl = e.target.closest('.del-btn');
+    if (delEl) {
+      // Buscar el registro por string para respetar el tipo original del id
+      const rec = registros.find(r => String(r.id) === delEl.dataset.id);
+      if (rec) adminDelete(rec.id);
+    }
+  });
+});
 
 function adminDelete(id) {
   openConfirm('Eliminar registro', '¿Eliminar este levantamiento? El local quedará libre para re-ingreso.', () => {
