@@ -342,13 +342,12 @@
 // Pega este código en Extensiones &gt; Apps Script
 // ══════════════════════════════════════════════════════════════
 const SHEET_NAME  = 'Respuestas';
-const FOLDER_NAME = 'Levantamiento POP pickup'; // carpeta destino en Google Drive
+const FOLDER_ID   = '1lEeX-U5l3syy_46KqzfTt-8eKRzPXnj2'; // carpeta fija en Google Drive
 const HEADERS     = ['ID','Fecha','Local','Nombre','Estacionamientos','N° Est.','Gráfica','Retiro','Foto','Drive URL'];
 
-// ─ Obtiene (o crea) la carpeta destino en Drive ───────────────────────────
-function getOrCreateFolder() {
-  var it = DriveApp.getFoldersByName(FOLDER_NAME);
-  return it.hasNext() ? it.next() : DriveApp.createFolder(FOLDER_NAME);
+// ─ Retorna la carpeta destino directamente por ID (sin búsqueda por nombre) ──
+function getFolder() {
+  return DriveApp.getFolderById(FOLDER_ID);
 }
 
 // ─ POST: recibe el formulario + imagen en base64, sube a Drive ─────────────
@@ -367,7 +366,7 @@ function doPost(e) {
     // ── Subir imagen original a Google Drive (sin recompresión) ────────────
     var driveUrl = '';
     if (data.photoB64 && data.photoMime && data.photoName) {
-      var folder = getOrCreateFolder();
+      var folder = getFolder();
       var bytes  = Utilities.base64Decode(data.photoB64);        // base64 → bytes
       var blob   = Utilities.newBlob(bytes, data.photoMime, data.photoName); // blob original
       var file   = folder.createFile(blob);                       // crea en Drive
