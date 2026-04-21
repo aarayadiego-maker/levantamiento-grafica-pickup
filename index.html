@@ -327,13 +327,13 @@
   <!-- Instrucciones Google Sheets -->
   <section class="card border border-blue-100 bg-blue-50 text-xs text-gray-600 space-y-2">
     <p class="font-bold text-wb">📊 Integración Google Sheets (sincronización en tiempo real)</p>
-    <p>Para ver los envíos de todos los locales en un solo lugar, sigue estos pasos <strong>una sola vez</strong>:</p>
+    <p>Sigue estos pasos para conectar y mantener el formulario con Google Sheets:</p>
     <ol class="list-decimal pl-4 space-y-1">
-      <li>Abre <a href="https://sheets.google.com" target="_blank" class="text-wb underline">Google Sheets</a> → crea una hoja nueva.</li>
-      <li>Ve a <strong>Extensiones → Apps Script</strong> y pega el código que aparece abajo.</li>
-      <li>Haz clic en <strong>Implementar → Nueva implementación → Aplicación web → Cualquier usuario → Implementar</strong>.</li>
-      <li>Copia la URL generada y pégala en el Panel Admin → campo <em>Webhook Google Sheets</em>.</li>
-      <li>Genera el HTML configurado y republica el link.</li>
+      <li>Abre tu <strong>Google Apps Script</strong> (el del proyecto ya deployado).</li>
+      <li><strong>Borra todo</strong> el código existente y pega el código de abajo (📋 Copiar).</li>
+      <li><strong>Ejecutar la limpieza (una vez):</strong> en el menú desplegable de funciones selecciona <code>limpiarHoja</code> y presiona ▶ Ejecutar — esto borrará todos los registros del Sheet al instante, sin necesidad de deploy.</li>
+      <li><strong>Deployar la nueva versión:</strong> <em>Implementar → Administrar implementaciones → ✏️ editar → Nueva versión → Implementar</em>. La URL no cambia.</li>
+      <li>A partir de ahora el botón 🗑 de cada registro y el botón Eliminar todos borrarán del Sheet definitivamente.</li>
     </ol>
     <div class="relative">
       <pre id="gasCode" class="bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto text-[10px] leading-relaxed whitespace-pre-wrap">// ══════════════════════════════════════════════
@@ -417,6 +417,18 @@ function out(data) {
   return ContentService
     .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ══ FUNCIÓN DE LIMPIEZA — ejecutar UNA VEZ desde el editor, sin deploy ══
+// Selecciona 'limpiarHoja' en el menú de funciones y presiona ▶ Ejecutar.
+// Borra todas las filas de datos dejando solo la cabecera.
+function limpiarHoja() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!sheet) { Logger.log('Hoja no encontrada'); return; }
+  var last = sheet.getLastRow();
+  if (last &lt; 2) { Logger.log('Ya está vacía'); return; }
+  sheet.deleteRows(2, last - 1);
+  Logger.log('Listo: ' + (last - 1) + ' filas eliminadas');
 }</pre>
       <button onclick="copyGasCode()" class="absolute top-2 right-2 bg-wb text-white text-[10px] font-bold px-2 py-1 rounded hover:bg-blue-700">
         📋 Copiar
