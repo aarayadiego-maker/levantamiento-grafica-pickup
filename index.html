@@ -358,11 +358,25 @@ function getFolder() {
 // ─ Inicializa cabeceras si la hoja está vacía ────────────────────────────
 function initSheet(sheet) {
   if (sheet.getLastRow() === 0) {
+    // Sheet vacío: crear headers y formato
     sheet.appendRow(HEADERS);
     sheet.getRange(1, 1, 1, HEADERS.length)
          .setFontWeight('bold').setBackground('#0053e2').setFontColor('#ffffff');
     sheet.setFrozenRows(1);
     Logger.log('[GAS] Hoja inicializada con cabeceras.');
+  } else {
+    // Sheet existente: migrar columnas faltantes (ej: Drive File ID, Drive URL)
+    var nCols       = Math.max(sheet.getLastColumn(), HEADERS.length);
+    var currentHdrs = sheet.getRange(1, 1, 1, nCols).getValues()[0];
+    var updated     = false;
+    HEADERS.forEach(function(h, i) {
+      if (String(currentHdrs[i] || '').trim() !== h) {
+        sheet.getRange(1, i + 1).setValue(h);
+        Logger.log('[GAS] Header migrado col ' + (i+1) + ': "' + (currentHdrs[i]||'') + '" → "' + h + '"');
+        updated = true;
+      }
+    });
+    if (updated) SpreadsheetApp.flush();
   }
 }
 
