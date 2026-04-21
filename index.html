@@ -345,7 +345,7 @@
 const SHEET_NAME = 'Respuestas';
 const FOLDER_ID  = '1lEeX-U5l3syy_46KqzfTt-8eKRzPXnj2';
 const HEADERS    = ['ID','Fecha','Local','Nombre','Estacionamientos','N° Est.',
-                    'Gráfica','Retiro','Foto','Drive File ID','Drive URL','Thumb'];
+                    'Gráfica','Retiro','Foto','Drive File ID','Drive URL'];
 
 // ─ Retorna la carpeta Drive por ID ───────────────────────────────────────────
 function getFolder() {
@@ -354,29 +354,18 @@ function getFolder() {
   return folder;
 }
 
-// ─ Inicializa o migra cabeceras ───────────────────────────────────────────────
+// ─ Inicializa cabeceras si la hoja está vacía ────────────────────────────
 function initSheet(sheet) {
   if (sheet.getLastRow() === 0) {
-    // Sheet vacío — crear cabeceras completas
     sheet.appendRow(HEADERS);
     sheet.getRange(1, 1, 1, HEADERS.length)
          .setFontWeight('bold').setBackground('#0053e2').setFontColor('#ffffff');
     sheet.setFrozenRows(1);
-    Logger.log('[GAS] Hoja inicializada con ' + HEADERS.length + ' columnas.');
-  } else {
-    // Sheet existente — agregar columna Thumb si no existe (migración automática)
-    var existing = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    if (existing.indexOf('Thumb') === -1) {
-      var col = sheet.getLastColumn() + 1;
-      var cell = sheet.getRange(1, col);
-      cell.setValue('Thumb').setFontWeight('bold')
-          .setBackground('#0053e2').setFontColor('#ffffff');
-      Logger.log('[GAS] Columna Thumb agregada en col ' + col);
-    }
+    Logger.log('[GAS] Hoja inicializada con cabeceras.');
   }
 }
 
-// ─ POST: valida → guarda Sheet → sube Drive → actualiza fila ──────────────────
+// ─ POST: guarda en Sheet → sube imagen a Drive → actualiza fila ─────────────
 function doPost(e) {
   Logger.log('[GAS] ── doPost iniciado ──────────────────────────────────');
 
@@ -387,77 +376,69 @@ function doPost(e) {
     Logger.log('[GAS] Payload: id=' + data.id + ' | local=' + data.local);
   } catch (parseErr) {
     Logger.log('[GAS] ERROR parse: ' + parseErr.message);
-    return out({ ok: false, uploaded: false, error: 'JSON inválido: ' + parseErr.message });
+    return out({ ok: false, error: 'JSON inválido: ' + parseErr.message });
   }
 
-  // 2. Validar campos de imagen — fallo explícito si falta alguno
-  var missing = [];
-  if (!data.photoB64  || data.photoB64.length  === 0) missing.push('photoB64');
-  if (!data.photoMime || data.photoMime.length === 0) missing.push('photoMime');
-  if (!data.photoName || data.photoName.length === 0) missing.push('photoName');
-  if (missing.length &gt; 0) {
-    var msg = 'Campos faltantes en el payload: ' + missing.join(', ');
-    Logger.log('[GAS] ERROR — ' + msg);
-    return out({ ok: false, uploaded: false, error: msg });
-  }
-  Logger.log('[GAS] Imagen recibida → nombre: ' + data.photoName
-    + ' | mime: ' + data.photoMime
-    + ' | base64 chars: ' + data.photoB64.length);
-
-  // 3. Guardar en Sheet PRIMERO — el registro siempre persiste aunque Drive falle
+  // 2. Guardar en Sheet PRIMERO — el registro persiste aunque Drive falle
   var ss, sheet, sheetRow;
   try {
     ss    = SpreadsheetApp.getActiveSpreadsheet();
     sheet = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
     initSheet(sheet);
     sheet.appendRow([
-      String(data.id     || ''), String(data.fecha   || ''), String(data.local   || ''),
-      String(data.nombre || ''), String(data.estac   || ''), Number(data.numEst  || 0),
-      String(data.grafica|| ''), String(data.retiro  || ''),
-      String(data.photoName),    'pendiente',                'pendiente',
-      String(data.photoThumb || '')   // thumbnail 160px JPEG — siempre disponible en dashboard
+      String(data.id      || ''),
+      String(data.fecha   || ''),
+      String(data.local   || ''),
+      String(data.nombre  || ''),
+      String(data.estac   || ''),
+      Number(data.numEst  || 0),
+      String(data.grafica || ''),
+      String(data.retiro  || ''),
+      String(data.photoName || ''),
+      '',   // Drive File ID — se rellena después de subir
+      ''    // Drive URL    — se rellena después de subir
     ]);
     sheetRow = sheet.getLastRow();
-    Logger.log('[GAS] ✅ Sheet fila ' + sheetRow + ' guardada (Drive pendiente)');
+    Logger.log('[GAS] ✅ Sheet: fila ' + sheetRow + ' guardada');
   } catch (sheetErr) {
     Logger.log('[GAS] ❌ ERROR Sheet: ' + sheetErr.message);
-    return out({ ok: false, uploaded: false,
-                 error: 'Fallo al guardar en Sheet: ' + sheetErr.message });
+    return out({ ok: false, error: 'Fallo Sheet: ' + sheetErr.message });
   }
 
-  // 4. Subir a Google Drive (bloque propio — error visible y trazable)
-  var driveFileId = '';
-  var driveUrl    = '';
+  // 3. Subir imagen a Google Drive (solo si el payload incluye los campos de foto)
+  if (!data.photoB64 || !data.photoMime || !data.photoName) {
+    Logger.log('[GAS] Sin foto en payload — fila guardada sin imagen Drive');
+    return out({ ok: true });
+  }
+
+  var driveFileId, driveUrl;
   try {
-    Logger.log('[GAS] Iniciando DriveApp.createFile...');
+    Logger.log('[GAS] Subiendo a Drive (' + data.photoB64.length + ' chars base64)...');
     var folder = getFolder();
     var bytes  = Utilities.base64Decode(data.photoB64);
     var blob   = Utilities.newBlob(bytes, data.photoMime, data.photoName);
     var file   = folder.createFile(blob);
     driveFileId = file.getId();
-    if (!driveFileId || driveFileId.length === 0)
-      throw new Error('file.getId() vacío — el archivo no se creó en Drive.');
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
     driveUrl = 'https://drive.google.com/uc?export=download&amp;id=' + driveFileId;
-    Logger.log('[GAS] ✅ Drive OK → ID: ' + driveFileId);
+    Logger.log('[GAS] ✅ Drive OK → ' + driveFileId);
 
-    // 5. Actualizar la fila con los datos de Drive
+    // 4. Actualizar la fila: Drive File ID en col 10, Drive URL en col 11
     sheet.getRange(sheetRow, 10).setValue(driveFileId);
     sheet.getRange(sheetRow, 11).setValue(driveUrl);
-    Logger.log('[GAS] ✅ Fila actualizada con Drive URL');
+    Logger.log('[GAS] ✅ Fila ' + sheetRow + ' actualizada con Drive URL');
   } catch (driveErr) {
     Logger.log('[GAS] ❌ ERROR Drive: ' + driveErr.message);
-    // Registro YA está en el Sheet — marcar como error en Drive
+    // El registro YA está en el Sheet — NO se elimina, se marca como drive-error
     try {
       sheet.getRange(sheetRow, 10).setValue('drive-error');
-      sheet.getRange(sheetRow, 11).setValue('ERROR: ' + driveErr.message);
+      sheet.getRange(sheetRow, 11).setValue('drive-error');
     } catch(_) {}
-    return out({ ok: true, uploaded: false,
-                 error: 'Registro guardado en Sheet. Fallo Drive: ' + driveErr.message });
+    return out({ ok: true, driveError: driveErr.message });
   }
 
   Logger.log('[GAS] ── doPost completado OK ────────────────────────────');
-  return out({ ok: true, uploaded: true, driveFileId: driveFileId, driveUrl: driveUrl });
+  return out({ ok: true, driveFileId: driveFileId, driveUrl: driveUrl });
 }
 
 // ─ GET: ping / list / delete / deleteAll ─────────────────────────────────
@@ -489,7 +470,6 @@ function doGet(e) {
           photoName:   String(o['Foto']              || ''),
           driveFileId: String(o['Drive File ID']     || ''),
           driveUrl:    String(o['Drive URL']         || ''),
-          photoThumb:  String(o['Thumb']             || ''),  // thumbnail 160px guardado en Sheet
         };
       }));
     }
@@ -1012,10 +992,9 @@ function handleSubmit(e) {
           id:        record.id,    fecha:    record.fecha,  local:    record.local,
           nombre:    record.nombre, estac:   record.estac,  numEst:   record.numEst,
           grafica:   record.grafica, retiro: record.retiro,
-          photoName:  uploadName,
-          photoThumb: record.photoThumb,  // thumbnail 160px — se guarda en Sheet para dashboard
-          photoB64:   uploadB64,          // 1920px JPEG ~0.5-2MB — va a Drive
-          photoMime:  'image/jpeg',
+          photoName: uploadName,
+          photoB64:  uploadB64,   // JPEG full-res — va a Drive
+          photoMime: 'image/jpeg',
         };
 
         let driveUrl    = '';
@@ -1120,7 +1099,7 @@ async function refreshDashboard() {
             grafica:    row.grafica    || '',
             retiro:     row.retiro     || '',
             photoName:  row.photoName  || '',
-            photoThumb:  row.photoThumb || ls.thumb || null, // Sheet > localStorage > nada
+            photoThumb:  ls.thumb || null,
             driveFileId: row.driveFileId || '',
             driveUrl:    row.driveUrl   || ls.driveUrl || '',
           };
