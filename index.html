@@ -599,7 +599,7 @@ const ADMIN_PWD     = /*ADMINPWD_JSON_START*/'admin2025'/*ADMINPWD_JSON_END*/;
 /* ─── Estado ─── */
 const LS_REC     = 'pop_v5_records';
 const LS_DELETED = 'pop_v5_deleted'; // IDs eliminados por admin — filtro persistente contra re-sync del Sheet
-const LS_PHOTOS  = 'pop_v5_photos';  // {local → {thumb, driveUrl}} — nunca se pisa con el sync del Sheet
+const LS_PHOTOS  = 'pop_v5_thumbs';  // {local → {thumb, driveUrl}} — key propio, no colisiona con cfg.photos ('pop_v5_photos')
 let registros    = JSON.parse(localStorage.getItem(LS_REC) || '[]');
 let currentPhoto = null;
 let isAdmin      = false;
@@ -1083,7 +1083,7 @@ function renderTable() {
           </div>`
         : r.driveUrl
           ? `<a href="${r.driveUrl}" target="_blank" class="text-wb underline text-[10px]">⬇️ Drive</a>`
-          : '<span class="text-gray-300">—</span>'}</td></td>
+          : '<span class="text-gray-300">—</span>'}</td>
       <td class="px-2 py-1.5 text-gray-400 whitespace-nowrap text-[10px]">${r.fecha}</td>
       <td class="px-2 py-1.5 font-bold">${esc(r.local)}</td>
       <td class="px-2 py-1.5 max-w-[90px] truncate">${esc(r.nombre) || '—'}</td>
