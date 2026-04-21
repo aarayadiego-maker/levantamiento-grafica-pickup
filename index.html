@@ -1244,10 +1244,10 @@ function handleDrop(e) {
 }
 function processFile(file) {
   if (!file) return;
-  if (!['image/jpeg', 'image/jpg', 'image/png'].includes(file.type))
+  if (!['image/jpeg', 'image/jpg', 'image/png', 'image/heic', 'image/heif'].includes(file.type.toLowerCase()))
     { showToast('❌ Solo .jpg / .jpeg / .png', '#ea1100'); return; }
-  if (file.size > 15 * 1024 * 1024)
-    { showToast('❌ La imagen supera 15 MB', '#ea1100'); return; }
+  if (file.size > 30 * 1024 * 1024)
+    { showToast('❌ La imagen supera 30 MB', '#ea1100'); return; }
   const reader = new FileReader();
   reader.onload = ev => {
     const img = new Image();
@@ -1259,19 +1259,17 @@ function processFile(file) {
       tc.getContext('2d').drawImage(img, 0, 0, tc.width, tc.height);
       const thumb = tc.toDataURL('image/jpeg', 0.75);
 
-      // ── Medium 250px — se envía al Sheet (cabe en celda, mucho mejor que 160px) ──
+      // ── Medium 250px — se envía al Sheet (cabe en celda) ──
       const MMAX = 250, mr = Math.min(MMAX / img.width, MMAX / img.height, 1);
       const mc = document.createElement('canvas');
       mc.width = Math.round(img.width * mr); mc.height = Math.round(img.height * mr);
       mc.getContext('2d').drawImage(img, 0, 0, mc.width, mc.height);
       const medium = mc.toDataURL('image/jpeg', 0.85);
 
-      // ── Full 1600px — guardada en localStorage, lightbox usa esta primero ──
-      const FMAX = 1600, fr = Math.min(FMAX / img.width, FMAX / img.height, 1);
-      const fc = document.createElement('canvas');
-      fc.width = Math.round(img.width * fr); fc.height = Math.round(img.height * fr);
-      fc.getContext('2d').drawImage(img, 0, 0, fc.width, fc.height);
-      const full = fc.toDataURL('image/jpeg', 0.92);
+      // ── Full — archivo original sin re-codificar ──
+      // NO pasa por canvas: se preserva la resolución y calidad original
+      // tal cual viene del celular o computador, sin pérdida adicional.
+      const full = ev.target.result;
 
       currentPhoto = { name: file.name, size: file.size, thumb, medium, full };
       document.getElementById('photoThumb').src = thumb;
