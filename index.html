@@ -1041,13 +1041,43 @@ function adminDelete(id) {
 function deleteAllRecords() {
   if (!isAdmin) return;
   openConfirm('⚠️ Eliminar TODOS los registros',
-    `Se borrarán permanentemente los ${registros.length} levantamientos registrados. ¿Continuar?`,
-    () => {
-      blacklistClear(); // limpiar blacklist — tabla vacía, ya no hay nada que filtrar
-      registros = []; saveLocal(); renderDashboard(); showToast('🗑 Todos los registros eliminados');
+    `Se borrarán permanentemente los ${registros.length} levantamientos. ¿Continuar?`,
+    async () => {
+      showToast('⏳ Borrando del Sheet…', '#0053e2');
+
+      // 1. Obtener todos los IDs del Sheet (pueden ser más que los visibles localmente)
+      let allIds = registros.map(r => String(r.id));
       if (cfg.webhookUrl) {
-        fetch(`${cfg.webhookUrl}?action=deleteAll`, { cache: 'no-store' })
-          .catch(() => {});
+        try {
+          const res = await fetch(`${cfg.webhookUrl}?action=list`, { cache: 'no-store' });
+          const all = await res.json();
+          if (Array.isArray(all)) allIds = all.map(r => String(r.id || '')).filter(Boolean);
+        } catch (_) {}
+      }
+
+      // 2. Blacklistear TODOS los IDs del Sheet antes de limpiar
+      //    Así no regresan aunque el GAS falle o no esté actualizado
+      allIds.forEach(id => blacklistAdd(id));
+
+      // 3. Limpiar local y re-renderizar
+      registros = []; saveLocal(); renderDashboard();
+
+      // 4. Intentar borrar del Sheet (el GAS debe estar actualizado)
+      if (cfg.webhookUrl) {
+        try {
+          const r = await fetch(`${cfg.webhookUrl}?action=deleteAll`, { cache: 'no-store' });
+          const d = await r.json();
+          if (d.ok) {
+            blacklistClear(); // Sheet confirmado limpio — ya no necesitamos la blacklist
+            showToast('✅ Todos los registros eliminados del Sheet', '#2a8703');
+          } else {
+            showToast('⚠️ GAS desactualizado: eliminados localmente, actualiza el GAS para borrar del Sheet', '#995213');
+          }
+        } catch (_) {
+          showToast('⚠️ Sin conexión: borrado local OK, el Sheet se limpiará cuando actualices el GAS', '#995213');
+        }
+      } else {
+        showToast('🗑 Registros eliminados localmente', '#2a8703');
       }
     });
 }
