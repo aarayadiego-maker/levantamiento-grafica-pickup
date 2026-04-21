@@ -289,8 +289,8 @@
     </div>
     <!-- Banner GAS desactualizado: se muestra si el deploy no tiene action=delete -->
 <div id="gasBanner" class="hidden mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-800 space-y-1">
-  <p class="font-bold text-sm">⚠️ Tu Google Apps Script está desactualizado</p>
-  <p>Los registros eliminados siguen vivos en el Sheet y volverán al sincronizar desde otro dispositivo. Para corregirlo:</p>
+  <p class="font-bold text-sm">⚠️ Tu Google Apps Script necesita actualización (v3 con Google Drive)</p>
+  <p>Las fotos se están guardando con compresión. La nueva versión las sube en calidad original a Google Drive. Para corregirlo:</p>
   <ol class="list-decimal pl-4 space-y-0.5 mt-1">
     <li>Abre tu <strong>Google Apps Script</strong> (el mismo que deployaste antes).</li>
     <li>Borra todo el código y pega el que aparece más abajo en esta página.</li>
@@ -327,22 +327,31 @@
   <!-- Instrucciones Google Sheets -->
   <section class="card border border-blue-100 bg-blue-50 text-xs text-gray-600 space-y-2">
     <p class="font-bold text-wb">📊 Integración Google Sheets (sincronización en tiempo real)</p>
-    <p>Sigue estos pasos para conectar y mantener el formulario con Google Sheets:</p>
+    <p>Sigue estos pasos para conectar y mantener el formulario con Google Sheets + Drive:</p>
     <ol class="list-decimal pl-4 space-y-1">
       <li>Abre tu <strong>Google Apps Script</strong> (el del proyecto ya deployado).</li>
       <li><strong>Borra todo</strong> el código existente y pega el código de abajo (📋 Copiar).</li>
-      <li><strong>Ejecutar la limpieza (una vez):</strong> en el menú desplegable de funciones selecciona <code>limpiarHoja</code> y presiona ▶ Ejecutar — esto borrará todos los registros del Sheet al instante, sin necesidad de deploy.</li>
-      <li><strong>Deployar la nueva versión:</strong> <em>Implementar → Administrar implementaciones → ✏️ editar → Nueva versión → Implementar</em>. La URL no cambia.</li>
-      <li>A partir de ahora el botón 🗑 de cada registro y el botón Eliminar todos borrarán del Sheet definitivamente.</li>
+      <li>Ejecuta <strong>limpiarHoja</strong> desde el editor (▶) para borrar registros del Sheet sin deploy.</li>
+      <li>Da permiso a Drive cuando el editor lo pida (primera vez que el script usa DriveApp).</li>
+      <li><strong>Implementar → Administrar implementaciones → ✏️ → Nueva versión → Implementar</strong>. La URL no cambia.</li>
+      <li>Las fotos se guardarán automáticamente en la carpeta <em>"Levantamiento POP pickup"</em> en tu Drive.</li>
     </ol>
     <div class="relative">
-      <pre id="gasCode" class="bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto text-[10px] leading-relaxed whitespace-pre-wrap">// ══════════════════════════════════════════════
-// Levantamiento POP Pickup — Google Apps Script
+      <pre id="gasCode" class="bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto text-[10px] leading-relaxed whitespace-pre-wrap">// ══════════════════════════════════════════════════════════════
+// Levantamiento POP pickup — Google Apps Script v3
 // Pega este código en Extensiones &gt; Apps Script
-// ══════════════════════════════════════════════
-const SHEET_NAME = 'Respuestas';
-const HEADERS    = ['ID','Fecha','Local','Nombre','Estacionamientos','N\u00b0 Est.','Gr\u00e1fica','Retiro','Foto','Foto (thumb)'];
+// ══════════════════════════════════════════════════════════════
+const SHEET_NAME  = 'Respuestas';
+const FOLDER_NAME = 'Levantamiento POP pickup'; // carpeta destino en Google Drive
+const HEADERS     = ['ID','Fecha','Local','Nombre','Estacionamientos','N° Est.','Gráfica','Retiro','Foto','Drive URL'];
 
+// ─ Obtiene (o crea) la carpeta destino en Drive ───────────────────────────
+function getOrCreateFolder() {
+  var it = DriveApp.getFoldersByName(FOLDER_NAME);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(FOLDER_NAME);
+}
+
+// ─ POST: recibe el formulario + imagen en base64, sube a Drive ─────────────
 function doPost(e) {
   try {
     var data  = JSON.parse(e.postData.contents);
@@ -354,61 +363,95 @@ function doPost(e) {
            .setFontWeight('bold').setBackground('#0053e2').setFontColor('#ffffff');
       sheet.setFrozenRows(1);
     }
+
+    // ── Subir imagen original a Google Drive (sin recompresión) ────────────
+    var driveUrl = '';
+    if (data.photoB64 && data.photoMime && data.photoName) {
+      var folder = getOrCreateFolder();
+      var bytes  = Utilities.base64Decode(data.photoB64);        // base64 → bytes
+      var blob   = Utilities.newBlob(bytes, data.photoMime, data.photoName); // blob original
+      var file   = folder.createFile(blob);                       // crea en Drive
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      driveUrl = 'https://drive.google.com/uc?export=download&id=' + file.getId();
+    }
+
     sheet.appendRow([
-      data.id || '',  data.fecha || '',   data.local || '',
+      data.id || '', data.fecha || '', data.local || '',
       data.nombre || '', data.estac || '', data.numEst || 0,
-      data.grafica || '', data.retiro || '', data.photoName || '',
-      data.photoData || ''  // thumbnail base64 160px
+      data.grafica || '', data.retiro || '',
+      data.photoName || '', driveUrl
     ]);
-    return out({ok: true});
+    return out({ok: true, driveUrl: driveUrl});
   } catch(err) { return out({ok:false, error:err.message}); }
 }
 
+// ─ GET: ping / list / delete / deleteAll ─────────────────────────────
 function doGet(e) {
   try {
     var action = (e.parameter || {}).action || '';
     var ss     = SpreadsheetApp.getActiveSpreadsheet();
     var sheet  = ss.getSheetByName(SHEET_NAME);
+
     if (action === 'ping')
-      return out({ok:true, version:2, rows: sheet ? Math.max(0, sheet.getLastRow()-1) : 0});
+      return out({ok:true, version:3, rows: sheet ? Math.max(0, sheet.getLastRow()-1) : 0});
+
     if (action === 'list') {
       if (!sheet || sheet.getLastRow() &lt; 2) return out([]);
       var rows = sheet.getDataRange().getValues();
       var hdrs = rows[0];
-      var data = rows.slice(1).map(function(r) {
-        var o = {};
-        hdrs.forEach(function(h, i) { o[h] = r[i]; });
+      return out(rows.slice(1).map(function(r) {
+        var o = {}; hdrs.forEach(function(h,i){ o[h]=r[i]; });
         return {
-          id: String(o['ID']||''), fecha: String(o['Fecha']||''),
-          local: String(o['Local']||''), nombre: String(o['Nombre']||''),
-          estac: String(o['Estacionamientos']||''), numEst: Number(o['N\u00b0 Est.']||0),
-          grafica: String(o['Gr\u00e1fica']||''), retiro: String(o['Retiro']||''),
-          photoName: String(o['Foto']||''), photoData: String(o['Foto (thumb)']||'')
+          id:        String(o['ID']   ||''),    fecha:    String(o['Fecha']  ||''),
+          local:     String(o['Local']||''),    nombre:   String(o['Nombre'] ||''),
+          estac:     String(o['Estacionamientos']||''),
+          numEst:    Number(o['N° Est.']||0),
+          grafica:   String(o['Gráfica']||''), retiro:   String(o['Retiro'] ||''),
+          photoName: String(o['Foto'] ||''),    driveUrl: String(o['Drive URL']||'')
         };
-      });
-      return out(data);
+      }));
     }
+
     if (action === 'delete') {
-      var id = String((e.parameter || {}).id || '');
+      var id = String((e.parameter||{}).id||'');
       if (!id) return out({ok:false, error:'id requerido'});
       if (!sheet || sheet.getLastRow() &lt; 2) return out({ok:true, deleted:false});
-      var vals = sheet.getDataRange().getValues();
-      var idIdx = vals[0].indexOf('ID');
-      if (idIdx === -1) return out({ok:false, error:'columna ID no encontrada'});
-      for (var i = vals.length - 1; i &gt;= 1; i--) {
+      var vals    = sheet.getDataRange().getValues();
+      var idIdx   = vals[0].indexOf('ID');
+      var urlIdx  = vals[0].indexOf('Drive URL');
+      for (var i = vals.length-1; i &gt;= 1; i--) {
         if (String(vals[i][idIdx]) === id) {
-          sheet.deleteRow(i + 1);
+          if (urlIdx !== -1 && vals[i][urlIdx]) {
+            try {
+              var m = String(vals[i][urlIdx]).match(/id=([^&]+)/);
+              if (m) DriveApp.getFileById(m[1]).setTrashed(true);
+            } catch(_) {}
+          }
+          sheet.deleteRow(i+1);
           return out({ok:true, deleted:true});
         }
       }
       return out({ok:true, deleted:false});
     }
+
     if (action === 'deleteAll') {
       if (!sheet || sheet.getLastRow() &lt; 2) return out({ok:true, deleted:0});
-      var lastRow = sheet.getLastRow();
-      sheet.deleteRows(2, lastRow - 1);
-      return out({ok:true, deleted: lastRow - 1});
+      var vals   = sheet.getDataRange().getValues();
+      var urlIdx = vals[0].indexOf('Drive URL');
+      if (urlIdx !== -1) {
+        vals.slice(1).forEach(function(row) {
+          if (row[urlIdx]) {
+            try {
+              var m = String(row[urlIdx]).match(/id=([^&]+)/);
+              if (m) DriveApp.getFileById(m[1]).setTrashed(true);
+            } catch(_) {}
+          }
+        });
+      }
+      sheet.deleteRows(2, sheet.getLastRow()-1);
+      return out({ok:true, deleted: vals.length-1});
     }
+
     return out({ok:false, error:'action desconocida'});
   } catch(err) { return out({ok:false, error:err.message}); }
 }
@@ -419,16 +462,14 @@ function out(data) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// ══ FUNCIÓN DE LIMPIEZA — ejecutar UNA VEZ desde el editor, sin deploy ══
-// Selecciona 'limpiarHoja' en el menú de funciones y presiona ▶ Ejecutar.
-// Borra todas las filas de datos dejando solo la cabecera.
+// ══ LIMPIEZA — selecciona 'limpiarHoja' y presiona ▶ Ejecutar (sin deploy) ══
 function limpiarHoja() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
   if (!sheet) { Logger.log('Hoja no encontrada'); return; }
   var last = sheet.getLastRow();
   if (last &lt; 2) { Logger.log('Ya está vacía'); return; }
-  sheet.deleteRows(2, last - 1);
-  Logger.log('Listo: ' + (last - 1) + ' filas eliminadas');
+  sheet.deleteRows(2, last-1);
+  Logger.log('Listo: '+(last-1)+' filas eliminadas');
 }</pre>
       <button onclick="copyGasCode()" class="absolute top-2 right-2 bg-wb text-white text-[10px] font-bold px-2 py-1 rounded hover:bg-blue-700">
         📋 Copiar
@@ -559,7 +600,7 @@ const ADMIN_PWD     = /*ADMINPWD_JSON_START*/'admin2025'/*ADMINPWD_JSON_END*/;
 /* ─── Estado ─── */
 const LS_REC     = 'pop_v5_records';
 const LS_DELETED = 'pop_v5_deleted'; // IDs eliminados por admin — filtro persistente contra re-sync del Sheet
-const LS_PHOTOS  = 'pop_v5_photos';  // {local → photoUrl 1600px} — nunca se pisa con el sync del Sheet
+const LS_PHOTOS  = 'pop_v5_photos';  // {local → {thumb, driveUrl}} — nunca se pisa con el sync del Sheet
 let registros    = JSON.parse(localStorage.getItem(LS_REC) || '[]');
 let currentPhoto = null;
 let isAdmin      = false;
@@ -842,7 +883,7 @@ function handleSubmit(e) {
   if (!currentPhoto)                      { flashDrop();         ok = false; }
   if (!ok) { showToast('⚠️ Revisa los campos obligatorios marcados en rojo', '#ea1100'); return; }
 
-  const photoMedium = currentPhoto.medium;  // capturar ANTES de clearPhoto()
+  const originalFile = currentPhoto.originalFile; // ref ANTES de clearPhoto()
 
   const record = {
     id:         Date.now(),
@@ -851,39 +892,68 @@ function handleSubmit(e) {
     numEst:     Number(numEst),
     grafica, retiro,
     photoName:  currentPhoto.name,
-    photoThumb: currentPhoto.thumb,   // 160px — celda de tabla
-    photoUrl:   currentPhoto.full,    // 1600px — lightbox (sólo localStorage)
+    photoThumb: currentPhoto.thumb,  // 160px — solo UI local
+    driveUrl:   '',                  // se llena cuando GAS responde
   };
 
   registros.push(record);
-  photoSave(local, currentPhoto.full); // 1600px en store propio — sobrevive sync del Sheet
+  photoSave(local, currentPhoto.thumb, ''); // thumb local; driveUrl llega del GAS
   saveLocal();
   e.target.reset();
-  clearPhoto();  // currentPhoto = null a partir de aquí
+  clearPhoto();
   showSuccessScreen(record, 'syncing');
   showSuccessModal();
 
-  // ─ Enviar al webhook — photoData=medium 250px, liviano y con buena calidad ─
-  const payload = { ...record };
-  payload.photoData = photoMedium || null;  // 250px → Sheet
-  delete payload.photoThumb;
-  delete payload.photoUrl;  // 1600px base64 no viaja al webhook, sólo vive en localStorage
+  // ─ Subir imagen original a Drive en background ────────────────────────
+  // 1. Codifica el archivo original a base64 (sin canvas, sin pérdida)
+  // 2. Hace POST al GAS; intenta leer la respuesta (CORS) para obtener driveUrl
+  // 3. Si CORS falla usa no-cors (fire & forget); driveUrl aparecerá al refrescar dashboard
+  if (cfg.webhookUrl) {
+    (async () => {
+      try {
+        const b64 = await fileToBase64(originalFile);
+        const payload = {
+          id: record.id, fecha: record.fecha, local: record.local,
+          nombre: record.nombre, estac: record.estac, numEst: record.numEst,
+          grafica: record.grafica, retiro: record.retiro,
+          photoName: record.photoName,
+          photoB64:  b64,                    // archivo original en base64
+          photoMime: originalFile.type,      // mime-type sin alterar
+        };
 
-  const ctrl = new AbortController();
-  const tid  = setTimeout(() => ctrl.abort(), 15000); // 15s máx — después resuelve OK igual
-  fetch(cfg.webhookUrl, {
-    method:  'POST',
-    mode:    'no-cors',
-    body:    JSON.stringify(payload),
-    headers: { 'Content-Type': 'text/plain' },
-    signal:  ctrl.signal,
-  })
-  .then(() => { clearTimeout(tid); updateSyncStatus('ok'); })
-  .catch(err => {
-    clearTimeout(tid);
-    // AbortError = timeout de 15s; datos ya guardados localmente → igual OK
-    updateSyncStatus(err.name === 'AbortError' ? 'ok' : 'error');
-  });
+        let driveUrl = '';
+        try {
+          // Intento con CORS — si GAS responde con Access-Control-Allow-Origin: *
+          const resp = await fetch(cfg.webhookUrl, {
+            method: 'POST', mode: 'cors',
+            body: JSON.stringify(payload),
+            headers: { 'Content-Type': 'text/plain' },
+          });
+          const result = await resp.json();
+          if (result.ok && result.driveUrl) driveUrl = result.driveUrl;
+        } catch (_) {
+          // CORS bloqueado (redirect chain de GAS) — re-intento sin leer respuesta
+          await fetch(cfg.webhookUrl, {
+            method: 'POST', mode: 'no-cors',
+            body: JSON.stringify(payload),
+            headers: { 'Content-Type': 'text/plain' },
+          });
+          // driveUrl llegará cuando el admin refresque el dashboard (desde el Sheet)
+        }
+
+        // Si obtuvimos la URL, actualizamos el registro local ahora mismo
+        if (driveUrl) {
+          const idx = registros.findIndex(r => r.id === record.id);
+          if (idx !== -1) registros[idx].driveUrl = driveUrl;
+          photoSave(local, record.photoThumb, driveUrl);
+          saveLocal();
+        }
+        updateSyncStatus('ok');
+      } catch (err) {
+        updateSyncStatus('error');
+      }
+    })();
+  }
 }
 
 /* ─── Blacklist de IDs eliminados ─── */
@@ -891,14 +961,32 @@ function deletedIds()    { return new Set(JSON.parse(localStorage.getItem(LS_DEL
 function blacklistAdd(id){ const s = deletedIds(); s.add(String(id)); localStorage.setItem(LS_DELETED, JSON.stringify([...s])); }
 function blacklistClear(){ localStorage.removeItem(LS_DELETED); }
 
-/* ─── Store de fotos 1600px ───
- * Guarda {local → photoUrl} en su propio key de localStorage.
- * El sync con el Sheet NUNCA lo toca, así las fotos sobreviven
- * limpiezas del Sheet, recargas y re-deploys del GAS. */
-function photosGet()              { return JSON.parse(localStorage.getItem(LS_PHOTOS) || '{}'); }
-function photoSave(local, url)    { const m = photosGet(); m[String(local).trim()] = url; localStorage.setItem(LS_PHOTOS, JSON.stringify(m)); }
-function photoRemove(local)       { const m = photosGet(); delete m[String(local).trim()]; localStorage.setItem(LS_PHOTOS, JSON.stringify(m)); }
-function photosClear()            { localStorage.removeItem(LS_PHOTOS); }
+/* ─── Codifica un File a base64 puro (sin el prefijo data:...) ───
+ * Usa FileReader — no pasa por canvas, cero pérdida de calidad.
+ * El GAS recibe el base64 y lo decodifica byte a byte antes de
+ * crear el archivo en Drive, preservando el original exacto. */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload  = () => resolve(r.result.split(',')[1]); // quita 'data:mime;base64,'
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+/* ─── Store de fotos locales ───
+ * {local → {thumb, driveUrl}} — key separado de los registros.
+ * thumb: 160px base64 para preview inmediato (liviano, ~3KB)
+ * driveUrl: URL de Drive — se llena cuando el GAS responde o en el próximo refresh */
+function photosGet()                       { return JSON.parse(localStorage.getItem(LS_PHOTOS) || '{}'); }
+function photoSave(local, thumb, driveUrl) {
+  const m = photosGet(), k = String(local).trim();
+  const prev = m[k] || {};
+  m[k] = { thumb: thumb || prev.thumb || null, driveUrl: driveUrl || prev.driveUrl || '' };
+  localStorage.setItem(LS_PHOTOS, JSON.stringify(m));
+}
+function photoRemove(local) { const m = photosGet(); delete m[String(local).trim()]; localStorage.setItem(LS_PHOTOS, JSON.stringify(m)); }
+function photosClear()      { localStorage.removeItem(LS_PHOTOS); }
 
 /* ─── Dashboard ─── */
 async function refreshDashboard() {
@@ -914,33 +1002,36 @@ async function refreshDashboard() {
         fetch(`${cfg.webhookUrl}?action=ping`, { cache: 'no-store' }).catch(() => null),
       ]);
 
-      // GAS actualizado devuelve version:2 en ping; el viejo no tiene ese campo
+      // GAS actualizado devuelve version:3 en ping; versiones anteriores no tienen Drive
       let gasHasDelete = false;
       if (pingRes) {
         try {
           const ping = await pingRes.json();
-          gasHasDelete = ping.ok === true && ping.version >= 2;
+          gasHasDelete = ping.ok === true && ping.version >= 3;
         } catch (_) {}
       }
       document.getElementById('gasBanner').classList.toggle('hidden', gasHasDelete);
 
       const remote = await res.json();
       if (Array.isArray(remote)) {
-        const deleted = deletedIds(); // IDs que el admin eliminó — no deben volver del Sheet
-        registros = remote.map(row => ({
-          id:         row.id         || Date.now() + Math.random(),
-          fecha:      row.fecha      || '',
-          local:      String(row.local || '').trim(),
-          nombre:     row.nombre     || '',
-          estac:      row.estac      || '',
-          numEst:     Number(row.numEst || 0),
-          grafica:    row.grafica    || '',
-          retiro:     row.retiro     || '',
-          photoName:  row.photoName  || '',
-          photoThumb: row.photoData  || null,  // 250px del Sheet
-          // Preferir: Drive URL del Sheet > 1600px local > null
-          photoUrl:   row.photoUrl   || photoStore[String(row.local || '').trim()] || null,
-        })).filter(r => r.local && !deleted.has(String(r.id)));
+        const deleted = deletedIds();
+        registros = remote.map(row => {
+          const k = String(row.local || '').trim();
+          const ls = photoStore[k] || {};
+          return {
+            id:         row.id         || Date.now() + Math.random(),
+            fecha:      row.fecha      || '',
+            local:      k,
+            nombre:     row.nombre     || '',
+            estac:      row.estac      || '',
+            numEst:     Number(row.numEst || 0),
+            grafica:    row.grafica    || '',
+            retiro:     row.retiro     || '',
+            photoName:  row.photoName  || '',
+            photoThumb: ls.thumb       || null,   // solo en localStorage (no va al Sheet)
+            driveUrl:   row.driveUrl   || ls.driveUrl || '', // Drive URL del Sheet o caché local
+          };
+        }).filter(r => r.local && !deleted.has(String(r.id)));
         saveLocal();
         const skipped = remote.length - registros.length;
         showToast(`✅ ${registros.length} registro(s) cargados${skipped > 0 ? ` (⛔ ${skipped} eliminados filtrados)` : ''}`, '#2a8703');
@@ -982,9 +1073,11 @@ function renderTable() {
                  class="w-10 h-10 object-cover rounded-lg border cursor-zoom-in flex-shrink-0 zoom-img"
                  data-id="${r.id}" title="Click para ampliar" />
             <a href="#" class="text-wb hover:text-blue-700 text-base dl-img" data-id="${r.id}"
-               title="Descargar en alta calidad">⬇️</a>
+               title="${r.driveUrl ? 'Descargar original de Drive' : 'Subiendo a Drive…'}">${r.driveUrl ? '⬇️' : '⏳'}</a>
           </div>`
-        : '<span class="text-gray-300">—</span>'}</td>
+        : r.driveUrl
+          ? `<a href="${r.driveUrl}" target="_blank" class="text-wb underline text-[10px]">⬇️ Drive</a>`
+          : '<span class="text-gray-300">—</span>'}</td></td>
       <td class="px-2 py-1.5 text-gray-400 whitespace-nowrap text-[10px]">${r.fecha}</td>
       <td class="px-2 py-1.5 font-bold">${esc(r.local)}</td>
       <td class="px-2 py-1.5 max-w-[90px] truncate">${esc(r.nombre) || '—'}</td>
@@ -1011,7 +1104,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const zoomEl = e.target.closest('.zoom-img');
     if (zoomEl) {
       const rec = registros.find(r => String(r.id) === zoomEl.dataset.id);
-      if (rec) lightbox(rec.photoThumb, rec.photoName, rec.photoUrl || null);
+      if (rec) lightbox(rec.photoThumb, rec.photoName, rec.driveUrl || null);
       return;
     }
     // Descarga — click en botón ⬇️
@@ -1020,11 +1113,12 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       const rec = registros.find(r => String(r.id) === dlEl.dataset.id);
       if (!rec) return;
-      if (rec.photoUrl && rec.photoUrl.startsWith('http')) {
-        window.open(rec.photoUrl, '_blank');  // Drive URL — abrir en nueva pestaña
+      if (rec.driveUrl) {
+        window.open(rec.driveUrl, '_blank'); // archivo original en Drive
       } else {
+        // Fallback: descarga la miniatura local si aún no hay Drive URL
         const a = document.createElement('a');
-        a.href = rec.photoUrl || rec.photoThumb;
+        a.href = rec.photoThumb || '';
         a.download = rec.photoName || 'foto.jpg';
         a.click();
       }
@@ -1104,7 +1198,8 @@ function exportToExcel() {
   const rows = registros.map(r => ({
     'Fecha': r.fecha, 'Local': r.local, 'Nombre encargado': r.nombre || '',
     'Estacionamiento': r.estac, 'N° Estacionamientos': r.numEst,
-    'Gráfica': r.grafica, 'Lugar de retiro': r.retiro, 'Archivo foto': r.photoName,
+    'Gráfica': r.grafica, 'Lugar de retiro': r.retiro,
+    'Archivo foto': r.photoName, 'Drive URL': r.driveUrl || '',
   }));
   const ws = XLSX.utils.json_to_sheet(rows);
   ws['!cols'] = [18,10,22,16,20,22,28,20].map(w => ({ wch: w }));
@@ -1245,33 +1340,24 @@ function handleDrop(e) {
 function processFile(file) {
   if (!file) return;
   if (!['image/jpeg', 'image/jpg', 'image/png', 'image/heic', 'image/heif'].includes(file.type.toLowerCase()))
-    { showToast('❌ Solo .jpg / .jpeg / .png', '#ea1100'); return; }
+    { showToast('❌ Solo .jpg / .jpeg / .png / .heic', '#ea1100'); return; }
   if (file.size > 30 * 1024 * 1024)
     { showToast('❌ La imagen supera 30 MB', '#ea1100'); return; }
+
   const reader = new FileReader();
   reader.onload = ev => {
     const img = new Image();
     img.onload = () => {
-      // ── Thumbnail 160px — celda de la tabla (carga rápida) ──
+      // ── Thumbnail 160px — SOLO para preview UI en tabla ──
+      // El archivo original (file) se envía intacto a Drive, sin pasar por canvas.
       const TMAX = 160, tr = Math.min(TMAX / img.width, TMAX / img.height, 1);
       const tc = document.createElement('canvas');
       tc.width = Math.round(img.width * tr); tc.height = Math.round(img.height * tr);
       tc.getContext('2d').drawImage(img, 0, 0, tc.width, tc.height);
       const thumb = tc.toDataURL('image/jpeg', 0.75);
 
-      // ── Medium 250px — se envía al Sheet (cabe en celda) ──
-      const MMAX = 250, mr = Math.min(MMAX / img.width, MMAX / img.height, 1);
-      const mc = document.createElement('canvas');
-      mc.width = Math.round(img.width * mr); mc.height = Math.round(img.height * mr);
-      mc.getContext('2d').drawImage(img, 0, 0, mc.width, mc.height);
-      const medium = mc.toDataURL('image/jpeg', 0.85);
-
-      // ── Full — archivo original sin re-codificar ──
-      // NO pasa por canvas: se preserva la resolución y calidad original
-      // tal cual viene del celular o computador, sin pérdida adicional.
-      const full = ev.target.result;
-
-      currentPhoto = { name: file.name, size: file.size, thumb, medium, full };
+      // Conserva referencia al File original — se envía como base64 al GAS
+      currentPhoto = { name: file.name, size: file.size, type: file.type, thumb, originalFile: file };
       document.getElementById('photoThumb').src = thumb;
       document.getElementById('photoName').textContent = file.name;
       document.getElementById('photoSize').textContent = fmtBytes(file.size);
