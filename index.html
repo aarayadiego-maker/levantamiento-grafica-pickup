@@ -370,7 +370,7 @@ function doGet(e) {
     var ss     = SpreadsheetApp.getActiveSpreadsheet();
     var sheet  = ss.getSheetByName(SHEET_NAME);
     if (action === 'ping')
-      return out({ok:true, rows: sheet ? Math.max(0, sheet.getLastRow()-1) : 0});
+      return out({ok:true, version:2, rows: sheet ? Math.max(0, sheet.getLastRow()-1) : 0});
     if (action === 'list') {
       if (!sheet || sheet.getLastRow() &lt; 2) return out([]);
       var rows = sheet.getDataRange().getValues();
@@ -904,19 +904,18 @@ async function refreshDashboard() {
           .map(r => [String(r.local).trim(), r.photoUrl])
       );
 
-      // Disparar list y probe de versión del GAS en paralelo
-      const [res, probeRes] = await Promise.all([
+      // Disparar list y ping de versión en paralelo (ping es lectura pura, sin efectos)
+      const [res, pingRes] = await Promise.all([
         fetch(`${cfg.webhookUrl}?action=list`, { cache: 'no-store' }),
-        fetch(`${cfg.webhookUrl}?action=delete&id=__probe__`, { cache: 'no-store' }).catch(() => null),
+        fetch(`${cfg.webhookUrl}?action=ping`, { cache: 'no-store' }).catch(() => null),
       ]);
 
-      // Detectar si el GAS tiene action=delete (versión actualizada)
+      // GAS actualizado devuelve version:2 en ping; el viejo no tiene ese campo
       let gasHasDelete = false;
-      if (probeRes) {
+      if (pingRes) {
         try {
-          const probe = await probeRes.json();
-          // GAS viejo devuelve error:'action desconocida'; nuevo devuelve ok:true/deleted:false
-          gasHasDelete = !(probe.error === 'action desconocida');
+          const ping = await pingRes.json();
+          gasHasDelete = ping.ok === true && ping.version >= 2;
         } catch (_) {}
       }
       document.getElementById('gasBanner').classList.toggle('hidden', gasHasDelete);
