@@ -337,54 +337,109 @@
       <li>Las fotos se guardarán automáticamente en la carpeta <em>"Levantamiento POP pickup"</em> en tu Drive.</li>
     </ol>
     <div class="relative">
-      <pre id="gasCode" class="bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto text-[10px] leading-relaxed whitespace-pre-wrap">// ══════════════════════════════════════════════════════════════
-// Levantamiento POP pickup — Google Apps Script v3
+      <pre id="gasCode" class="bg-white border border-gray-200 rounded-lg p-3 overflow-x-auto text-[10px] leading-relaxed whitespace-pre-wrap">// ══════════════════════════════════════════════════════════════════════
+// Levantamiento POP pickup — Google Apps Script v4
 // Pega este código en Extensiones &gt; Apps Script
-// ══════════════════════════════════════════════════════════════
-const SHEET_NAME  = 'Respuestas';
-const FOLDER_ID   = '1lEeX-U5l3syy_46KqzfTt-8eKRzPXnj2'; // carpeta fija en Google Drive
-const HEADERS     = ['ID','Fecha','Local','Nombre','Estacionamientos','N° Est.','Gráfica','Retiro','Foto','Drive URL'];
+// Después: Implementar → Administrar → ✏️ → Nueva versión → Implementar
+// ══════════════════════════════════════════════════════════════════════
+const SHEET_NAME = 'Respuestas';
+const FOLDER_ID  = '1lEeX-U5l3syy_46KqzfTt-8eKRzPXnj2';
+const HEADERS    = ['ID','Fecha','Local','Nombre','Estacionamientos','N° Est.',
+                    'Gráfica','Retiro','Foto','Drive File ID','Drive URL'];
 
-// ─ Retorna la carpeta destino directamente por ID (sin búsqueda por nombre) ──
+// ─ Retorna la carpeta Drive por ID ───────────────────────────────────────
 function getFolder() {
-  return DriveApp.getFolderById(FOLDER_ID);
+  var folder = DriveApp.getFolderById(FOLDER_ID);
+  Logger.log('[GAS] Carpeta: ' + folder.getName() + ' (ID: ' + FOLDER_ID + ')');
+  return folder;
 }
 
-// ─ POST: recibe el formulario + imagen en base64, sube a Drive ─────────────
+// ─ Inicializa cabeceras si la hoja está vacía ────────────────────────────
+function initSheet(sheet) {
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(HEADERS);
+    sheet.getRange(1, 1, 1, HEADERS.length)
+         .setFontWeight('bold').setBackground('#0053e2').setFontColor('#ffffff');
+    sheet.setFrozenRows(1);
+    Logger.log('[GAS] Hoja inicializada con cabeceras.');
+  }
+}
+
+// ─ POST: valida → sube Drive → guarda Sheet ──────────────────────────────
 function doPost(e) {
+  Logger.log('[GAS] ── doPost iniciado ──────────────────────────────────');
+
+  // 1. Parsear JSON
+  var data;
   try {
-    var data  = JSON.parse(e.postData.contents);
+    data = JSON.parse(e.postData.contents);
+    Logger.log('[GAS] Payload: id=' + data.id + ' | local=' + data.local);
+  } catch (parseErr) {
+    Logger.log('[GAS] ERROR parse: ' + parseErr.message);
+    return out({ ok: false, uploaded: false, error: 'JSON inválido: ' + parseErr.message });
+  }
+
+  // 2. Validar campos de imagen — fallo explícito si falta alguno
+  var missing = [];
+  if (!data.photoB64  || data.photoB64.length  === 0) missing.push('photoB64');
+  if (!data.photoMime || data.photoMime.length === 0) missing.push('photoMime');
+  if (!data.photoName || data.photoName.length === 0) missing.push('photoName');
+  if (missing.length &gt; 0) {
+    var msg = 'Campos faltantes en el payload: ' + missing.join(', ');
+    Logger.log('[GAS] ERROR — ' + msg);
+    return out({ ok: false, uploaded: false, error: msg });
+  }
+  Logger.log('[GAS] Imagen recibida → nombre: ' + data.photoName
+    + ' | mime: ' + data.photoMime
+    + ' | base64 chars: ' + data.photoB64.length);
+
+  // 3. Subir a Google Drive (bloque propio — error visible y trazable)
+  var driveFileId = '';
+  var driveUrl    = '';
+  try {
+    Logger.log('[GAS] Iniciando DriveApp.createFile...');
+    var folder = getFolder();
+    var bytes  = Utilities.base64Decode(data.photoB64);
+    var blob   = Utilities.newBlob(bytes, data.photoMime, data.photoName);
+    var file   = folder.createFile(blob);
+    driveFileId = file.getId();
+    if (!driveFileId || driveFileId.length === 0)
+      throw new Error('file.getId() vacío — el archivo no se creó en Drive.');
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    driveUrl = 'https://drive.google.com/uc?export=download&amp;id=' + driveFileId;
+    Logger.log('[GAS] ✅ Drive OK → ID: ' + driveFileId);
+    Logger.log('[GAS] ✅ Drive URL: ' + driveUrl);
+  } catch (driveErr) {
+    Logger.log('[GAS] ❌ ERROR Drive: ' + driveErr.message);
+    return out({ ok: false, uploaded: false,
+                 error: 'Fallo al subir imagen a Drive: ' + driveErr.message });
+  }
+
+  // 4. Guardar en Sheet SOLO si Drive fue exitoso
+  try {
     var ss    = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
-    if (sheet.getLastRow() === 0) {
-      sheet.appendRow(HEADERS);
-      sheet.getRange(1,1,1,HEADERS.length)
-           .setFontWeight('bold').setBackground('#0053e2').setFontColor('#ffffff');
-      sheet.setFrozenRows(1);
-    }
-
-    // ── Subir imagen original a Google Drive (sin recompresión) ────────────
-    var driveUrl = '';
-    if (data.photoB64 && data.photoMime && data.photoName) {
-      var folder = getFolder();
-      var bytes  = Utilities.base64Decode(data.photoB64);        // base64 → bytes
-      var blob   = Utilities.newBlob(bytes, data.photoMime, data.photoName); // blob original
-      var file   = folder.createFile(blob);                       // crea en Drive
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      driveUrl = 'https://drive.google.com/uc?export=download&id=' + file.getId();
-    }
-
+    initSheet(sheet);
     sheet.appendRow([
-      data.id || '', data.fecha || '', data.local || '',
-      data.nombre || '', data.estac || '', data.numEst || 0,
-      data.grafica || '', data.retiro || '',
-      data.photoName || '', driveUrl
+      String(data.id     || ''), String(data.fecha   || ''), String(data.local   || ''),
+      String(data.nombre || ''), String(data.estac   || ''), Number(data.numEst  || 0),
+      String(data.grafica|| ''), String(data.retiro  || ''),
+      String(data.photoName),    driveFileId,                driveUrl
     ]);
-    return out({ok: true, driveUrl: driveUrl});
-  } catch(err) { return out({ok:false, error:err.message}); }
+    Logger.log('[GAS] ✅ Sheet: fila guardada para local=' + data.local);
+  } catch (sheetErr) {
+    Logger.log('[GAS] ❌ ERROR Sheet: ' + sheetErr.message);
+    // El archivo ya está en Drive — informar éxito parcial
+    return out({ ok: false, uploaded: true,
+                 driveFileId: driveFileId, driveUrl: driveUrl,
+                 error: 'Drive OK pero Sheet falló: ' + sheetErr.message });
+  }
+
+  Logger.log('[GAS] ── doPost completado OK ────────────────────────────');
+  return out({ ok: true, uploaded: true, driveFileId: driveFileId, driveUrl: driveUrl });
 }
 
-// ─ GET: ping / list / delete / deleteAll ─────────────────────────────
+// ─ GET: ping / list / delete / deleteAll ─────────────────────────────────
 function doGet(e) {
   try {
     var action = (e.parameter || {}).action || '';
@@ -392,67 +447,68 @@ function doGet(e) {
     var sheet  = ss.getSheetByName(SHEET_NAME);
 
     if (action === 'ping')
-      return out({ok:true, version:3, rows: sheet ? Math.max(0, sheet.getLastRow()-1) : 0});
+      return out({ ok: true, version: 4,
+                   rows: sheet ? Math.max(0, sheet.getLastRow() - 1) : 0 });
 
     if (action === 'list') {
       if (!sheet || sheet.getLastRow() &lt; 2) return out([]);
       var rows = sheet.getDataRange().getValues();
       var hdrs = rows[0];
       return out(rows.slice(1).map(function(r) {
-        var o = {}; hdrs.forEach(function(h,i){ o[h]=r[i]; });
+        var o = {}; hdrs.forEach(function(h, i) { o[h] = r[i]; });
         return {
-          id:        String(o['ID']   ||''),    fecha:    String(o['Fecha']  ||''),
-          local:     String(o['Local']||''),    nombre:   String(o['Nombre'] ||''),
-          estac:     String(o['Estacionamientos']||''),
-          numEst:    Number(o['N° Est.']||0),
-          grafica:   String(o['Gráfica']||''), retiro:   String(o['Retiro'] ||''),
-          photoName: String(o['Foto'] ||''),    driveUrl: String(o['Drive URL']||'')
+          id:          String(o['ID']               || ''),
+          fecha:       String(o['Fecha']             || ''),
+          local:       String(o['Local']             || ''),
+          nombre:      String(o['Nombre']            || ''),
+          estac:       String(o['Estacionamientos']  || ''),
+          numEst:      Number(o['N° Est.']           || 0),
+          grafica:     String(o['Gráfica']           || ''),
+          retiro:      String(o['Retiro']            || ''),
+          photoName:   String(o['Foto']              || ''),
+          driveFileId: String(o['Drive File ID'] || ''),
+          driveUrl:    String(o['Drive URL']     || ''),
         };
       }));
     }
 
     if (action === 'delete') {
-      var id = String((e.parameter||{}).id||'');
-      if (!id) return out({ok:false, error:'id requerido'});
-      if (!sheet || sheet.getLastRow() &lt; 2) return out({ok:true, deleted:false});
-      var vals    = sheet.getDataRange().getValues();
-      var idIdx   = vals[0].indexOf('ID');
-      var urlIdx  = vals[0].indexOf('Drive URL');
-      for (var i = vals.length-1; i &gt;= 1; i--) {
+      var id = String((e.parameter || {}).id || '');
+      if (!id) return out({ ok: false, error: 'id requerido' });
+      if (!sheet || sheet.getLastRow() &lt; 2) return out({ ok: true, deleted: false });
+      var vals   = sheet.getDataRange().getValues();
+      var idIdx  = vals[0].indexOf('ID');
+      var fidIdx = vals[0].indexOf('Drive File ID');
+      for (var i = vals.length - 1; i &gt;= 1; i--) {
         if (String(vals[i][idIdx]) === id) {
-          if (urlIdx !== -1 && vals[i][urlIdx]) {
-            try {
-              var m = String(vals[i][urlIdx]).match(/id=([^&]+)/);
-              if (m) DriveApp.getFileById(m[1]).setTrashed(true);
-            } catch(_) {}
-          }
-          sheet.deleteRow(i+1);
-          return out({ok:true, deleted:true});
+          if (fidIdx !== -1 && vals[i][fidIdx])
+            try { DriveApp.getFileById(String(vals[i][fidIdx])).setTrashed(true); } catch(_) {}
+          sheet.deleteRow(i + 1);
+          return out({ ok: true, deleted: true });
         }
       }
-      return out({ok:true, deleted:false});
+      return out({ ok: true, deleted: false });
     }
 
     if (action === 'deleteAll') {
-      if (!sheet || sheet.getLastRow() &lt; 2) return out({ok:true, deleted:0});
+      if (!sheet || sheet.getLastRow() &lt; 2) return out({ ok: true, deleted: 0 });
       var vals   = sheet.getDataRange().getValues();
-      var urlIdx = vals[0].indexOf('Drive URL');
-      if (urlIdx !== -1) {
+      var fidIdx = vals[0].indexOf('Drive File ID');
+      if (fidIdx !== -1)
         vals.slice(1).forEach(function(row) {
-          if (row[urlIdx]) {
-            try {
-              var m = String(row[urlIdx]).match(/id=([^&]+)/);
-              if (m) DriveApp.getFileById(m[1]).setTrashed(true);
-            } catch(_) {}
-          }
+          if (row[fidIdx])
+            try { DriveApp.getFileById(String(row[fidIdx])).setTrashed(true); } catch(_) {}
         });
-      }
-      sheet.deleteRows(2, sheet.getLastRow()-1);
-      return out({ok:true, deleted: vals.length-1});
+      var count = sheet.getLastRow() - 1;
+      sheet.deleteRows(2, count);
+      return out({ ok: true, deleted: count });
     }
 
-    return out({ok:false, error:'action desconocida'});
-  } catch(err) { return out({ok:false, error:err.message}); }
+    return out({ ok: false, error: 'action desconocida: ' + action });
+  } catch (err) {
+    Logger.log('[GAS] doGet ERROR: ' + err.message);
+    return out({ ok: false, error: err.message });
+  }
 }
 
 function out(data) {
@@ -461,14 +517,28 @@ function out(data) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// ══ LIMPIEZA — selecciona 'limpiarHoja' y presiona ▶ Ejecutar (sin deploy) ══
+// ══ LIMPIEZA — ejecutar desde el editor (sin deploy) ═══════════════════════
 function limpiarHoja() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
   if (!sheet) { Logger.log('Hoja no encontrada'); return; }
   var last = sheet.getLastRow();
   if (last &lt; 2) { Logger.log('Ya está vacía'); return; }
-  sheet.deleteRows(2, last-1);
-  Logger.log('Listo: '+(last-1)+' filas eliminadas');
+  sheet.deleteRows(2, last - 1);
+  Logger.log('Listo: ' + (last - 1) + ' filas eliminadas');
+}
+
+// ══ DIAGNÓSTICO — ejecutar para verificar permisos Drive + Sheet ═══════════
+function diagnostico() {
+  Logger.log('=== DIAGNÓSTICO GAS v4 ===');
+  try {
+    var folder = DriveApp.getFolderById(FOLDER_ID);
+    Logger.log('✅ Carpeta Drive OK → ' + folder.getName());
+  } catch(e) { Logger.log('❌ Carpeta Drive: ' + e.message); }
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    Logger.log('✅ Sheet OK → ' + ss.getName());
+  } catch(e) { Logger.log('❌ Sheet: ' + e.message); }
+  Logger.log('=== FIN DIAGNÓSTICO ===');
 }</pre>
       <button onclick="copyGasCode()" class="absolute top-2 right-2 bg-wb text-white text-[10px] font-bold px-2 py-1 rounded hover:bg-blue-700">
         📋 Copiar
@@ -885,14 +955,15 @@ function handleSubmit(e) {
   const originalFile = currentPhoto.originalFile; // ref ANTES de clearPhoto()
 
   const record = {
-    id:         Date.now(),
-    fecha:      new Date().toLocaleString('es-CL'),
+    id:          Date.now(),
+    fecha:       new Date().toLocaleString('es-CL'),
     local, nombre, estac,
-    numEst:     Number(numEst),
+    numEst:      Number(numEst),
     grafica, retiro,
-    photoName:  currentPhoto.name,
-    photoThumb: currentPhoto.thumb,  // 160px — solo UI local
-    driveUrl:   '',                  // se llena cuando GAS responde
+    photoName:   currentPhoto.name,
+    photoThumb:  currentPhoto.thumb,  // 160px — solo UI local
+    driveFileId: '',                  // se llena cuando GAS responde
+    driveUrl:    '',                  // se llena cuando GAS responde
   };
 
   registros.push(record);
@@ -920,30 +991,39 @@ function handleSubmit(e) {
           photoMime: originalFile.type,      // mime-type sin alterar
         };
 
-        let driveUrl = '';
+        let driveUrl    = '';
+        let driveFileId = '';
         try {
-          // Intento con CORS — si GAS responde con Access-Control-Allow-Origin: *
+          // Intento con CORS — GAS responde con Access-Control-Allow-Origin: *
           const resp = await fetch(cfg.webhookUrl, {
             method: 'POST', mode: 'cors',
             body: JSON.stringify(payload),
             headers: { 'Content-Type': 'text/plain' },
           });
           const result = await resp.json();
-          if (result.ok && result.driveUrl) driveUrl = result.driveUrl;
+          if (result.uploaded && result.driveUrl) {
+            driveUrl    = result.driveUrl;
+            driveFileId = result.driveFileId || '';
+          }
+          // GAS v4 reporta errores explícitamente — loguearlo siempre
+          if (!result.ok) console.warn('[form] GAS error:', result.error || 'sin detalle');
         } catch (_) {
-          // CORS bloqueado (redirect chain de GAS) — re-intento sin leer respuesta
+          // CORS bloqueado (redirect chain de GAS) — fire & forget
           await fetch(cfg.webhookUrl, {
             method: 'POST', mode: 'no-cors',
             body: JSON.stringify(payload),
             headers: { 'Content-Type': 'text/plain' },
           });
-          // driveUrl llegará cuando el admin refresque el dashboard (desde el Sheet)
+          // driveUrl/driveFileId llegarán en el próximo refresh del dashboard
         }
 
         // Si obtuvimos la URL, actualizamos el registro local ahora mismo
         if (driveUrl) {
           const idx = registros.findIndex(r => r.id === record.id);
-          if (idx !== -1) registros[idx].driveUrl = driveUrl;
+          if (idx !== -1) {
+            registros[idx].driveUrl    = driveUrl;
+            registros[idx].driveFileId = driveFileId;
+          }
           photoSave(local, record.photoThumb, driveUrl);
           saveLocal();
         }
@@ -1006,7 +1086,7 @@ async function refreshDashboard() {
       if (pingRes) {
         try {
           const ping = await pingRes.json();
-          gasHasDelete = ping.ok === true && ping.version >= 3;
+          gasHasDelete = ping.ok === true && ping.version >= 4;
         } catch (_) {}
       }
       document.getElementById('gasBanner').classList.toggle('hidden', gasHasDelete);
@@ -1027,8 +1107,9 @@ async function refreshDashboard() {
             grafica:    row.grafica    || '',
             retiro:     row.retiro     || '',
             photoName:  row.photoName  || '',
-            photoThumb: ls.thumb || row.photoData || null, // local > sheet v2 legacy
-            driveUrl:   row.driveUrl   || ls.driveUrl || '',
+            photoThumb:  ls.thumb || row.photoData || null,
+            driveFileId: row.driveFileId || '',
+            driveUrl:    row.driveUrl   || ls.driveUrl || '',
           };
         }).filter(r => r.local && !deleted.has(String(r.id)));
 
