@@ -1014,7 +1014,7 @@ async function refreshDashboard() {
       const remote = await res.json();
       if (Array.isArray(remote)) {
         const deleted = deletedIds();
-        registros = remote.map(row => {
+        const mapped = remote.map(row => {
           const k = String(row.local || '').trim();
           const ls = photoStore[k] || {};
           return {
@@ -1027,12 +1027,19 @@ async function refreshDashboard() {
             grafica:    row.grafica    || '',
             retiro:     row.retiro     || '',
             photoName:  row.photoName  || '',
-            photoThumb: ls.thumb       || null,   // solo en localStorage (no va al Sheet)
-            driveUrl:   row.driveUrl   || ls.driveUrl || '', // Drive URL del Sheet o caché local
+            photoThumb: ls.thumb || row.photoData || null, // local > sheet v2 legacy
+            driveUrl:   row.driveUrl   || ls.driveUrl || '',
           };
         }).filter(r => r.local && !deleted.has(String(r.id)));
-        saveLocal();
-        const skipped = remote.length - registros.length;
+
+        // Solo actualizar localStorage si el Sheet tiene registros reales.
+        // Si el Sheet está vacío (él fue limpiado pero aún hay datos locales válidos),
+        // conservamos el estado local — el borrado explícito usa deleteAllRecords().
+        if (mapped.length > 0 || registros.length === 0) {
+          registros = mapped;
+          saveLocal();
+        }
+        const skipped = remote.length - (mapped.length);
         showToast(`✅ ${registros.length} registro(s) cargados${skipped > 0 ? ` (⛔ ${skipped} eliminados filtrados)` : ''}`, '#2a8703');
       }
     } catch (err) {
