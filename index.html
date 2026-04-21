@@ -427,6 +427,7 @@ function doPost(e) {
     // 4. Actualizar la fila: Drive File ID en col 10, Drive URL en col 11
     sheet.getRange(sheetRow, 10).setValue(driveFileId);
     sheet.getRange(sheetRow, 11).setValue(driveUrl);
+    SpreadsheetApp.flush();  // fuerza commit antes de que el Web App retorne
     Logger.log('[GAS] ✅ Fila ' + sheetRow + ' actualizada con Drive URL');
   } catch (driveErr) {
     Logger.log('[GAS] ❌ ERROR Drive: ' + driveErr.message);
@@ -434,6 +435,7 @@ function doPost(e) {
     try {
       sheet.getRange(sheetRow, 10).setValue('drive-error');
       sheet.getRange(sheetRow, 11).setValue('drive-error');
+      SpreadsheetApp.flush();
     } catch(_) {}
     return out({ ok: true, driveError: driveErr.message });
   }
