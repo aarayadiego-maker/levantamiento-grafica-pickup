@@ -316,6 +316,7 @@
           <th class="px-2 py-2 text-left">Gráfica</th>
           <th class="px-2 py-2 text-left">Retiro</th>
           <th class="px-2 py-2 text-left">Archivo</th>
+          <th class="px-2 py-2 text-center">Descargar</th>
           <th class="px-2 py-2 text-center">Acc.</th>
         </tr></thead>
         <tbody id="registrosBody" class="divide-y divide-gray-100"></tbody>
@@ -1169,6 +1170,14 @@ function renderTable() {
       <td class="px-2 py-1.5"><span class="badge bg-green-100 text-green-700">${r.grafica}</span></td>
       <td class="px-2 py-1.5 text-[10px] text-gray-500 max-w-[100px] truncate" title="${esc(r.retiro)}">${r.retiro}</td>
       <td class="px-2 py-1.5 text-gray-400 max-w-[90px] truncate text-[10px]" title="${esc(r.photoName)}">${esc(r.photoName)}</td>
+      <td class="px-2 py-1.5 text-center">${
+        r.driveFileId && r.driveFileId !== 'drive-error' && r.driveFileId !== ''
+          ? `<button class="dl-orig text-[11px] font-medium px-2 py-0.5 rounded border
+                          border-blue-300 text-blue-700 hover:bg-blue-50 whitespace-nowrap"
+                    data-fid="${esc(r.driveFileId)}" data-name="${esc(r.photoName)}"
+                    title="Descargar imagen original desde Drive">⬇ Original</button>`
+          : `<span class="text-gray-300 text-[10px]">${r.driveFileId === 'drive-error' ? '⚠️' : '⏳'}</span>`
+      }</td>
       <td class="px-2 py-1.5 text-center">
         <button class="del-btn text-wr hover:text-red-700 text-lg leading-none" data-id="${r.id}" title="Eliminar">🗑</button>
       </td>`;
@@ -1215,6 +1224,11 @@ document.addEventListener('DOMContentLoaded', () => {
       // Buscar el registro por string para respetar el tipo original del id
       const rec = registros.find(r => String(r.id) === delEl.dataset.id);
       if (rec) adminDelete(rec.id);
+    }
+    // Descargar original — click en botón ⬇ Original
+    const dlOrig = e.target.closest('.dl-orig');
+    if (dlOrig) {
+      downloadOriginal(dlOrig.dataset.fid, dlOrig.dataset.name);
     }
   });
 });
@@ -1476,7 +1490,18 @@ function clearPhoto() {
   document.getElementById('photoPreview').classList.add('hidden');
 }
 
-/* ─── Helpers ─── */
+/* Descarga imagen original desde Drive en calidad completa, sin pasar por preview */
+function downloadOriginal(fileId, name) {
+  if (!fileId) return;
+  const url = 'https://drive.google.com/uc?export=download&id=' + fileId;
+  const a   = document.createElement('a');
+  a.href     = url;
+  a.download = name || 'imagen.jpg';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 const fmtBytes = b => b < 1024 ? b + ' B' : b < 1048576 ? (b/1024).toFixed(1) + ' KB' : (b/1048576).toFixed(2) + ' MB';
 const esc = s  => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const saveLocal = () => {
