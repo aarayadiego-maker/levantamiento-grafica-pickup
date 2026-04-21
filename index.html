@@ -559,6 +559,7 @@ const ADMIN_PWD     = /*ADMINPWD_JSON_START*/'admin2025'/*ADMINPWD_JSON_END*/;
 /* ─── Estado ─── */
 const LS_REC     = 'pop_v5_records';
 const LS_DELETED = 'pop_v5_deleted'; // IDs eliminados por admin — filtro persistente contra re-sync del Sheet
+const LS_PHOTOS  = 'pop_v5_photos';  // {local → photoUrl 1600px} — nunca se pisa con el sync del Sheet
 let registros    = JSON.parse(localStorage.getItem(LS_REC) || '[]');
 let currentPhoto = null;
 let isAdmin      = false;
@@ -855,6 +856,7 @@ function handleSubmit(e) {
   };
 
   registros.push(record);
+  photoSave(local, currentPhoto.full); // 1600px en store propio — sobrevive sync del Sheet
   saveLocal();
   e.target.reset();
   clearPhoto();  // currentPhoto = null a partir de aquí
@@ -884,13 +886,19 @@ function handleSubmit(e) {
   });
 }
 
-/* ─── Blacklist de IDs eliminados ───
- * Cuando el admin elimina un registro, su ID se guarda aquí.
- * refreshDashboard() filtra contra esta lista antes de mostrar los datos del Sheet,
- * garantizando que los eliminados no reaparezcan aunque el GAS aún no borre la fila. */
+/* ─── Blacklist de IDs eliminados ─── */
 function deletedIds()    { return new Set(JSON.parse(localStorage.getItem(LS_DELETED) || '[]')); }
 function blacklistAdd(id){ const s = deletedIds(); s.add(String(id)); localStorage.setItem(LS_DELETED, JSON.stringify([...s])); }
 function blacklistClear(){ localStorage.removeItem(LS_DELETED); }
+
+/* ─── Store de fotos 1600px ───
+ * Guarda {local → photoUrl} en su propio key de localStorage.
+ * El sync con el Sheet NUNCA lo toca, así las fotos sobreviven
+ * limpiezas del Sheet, recargas y re-deploys del GAS. */
+function photosGet()              { return JSON.parse(localStorage.getItem(LS_PHOTOS) || '{}'); }
+function photoSave(local, url)    { const m = photosGet(); m[String(local).trim()] = url; localStorage.setItem(LS_PHOTOS, JSON.stringify(m)); }
+function photoRemove(local)       { const m = photosGet(); delete m[String(local).trim()]; localStorage.setItem(LS_PHOTOS, JSON.stringify(m)); }
+function photosClear()            { localStorage.removeItem(LS_PHOTOS); }
 
 /* ─── Dashboard ─── */
 async function refreshDashboard() {
@@ -898,11 +906,7 @@ async function refreshDashboard() {
 
   if (cfg.webhookUrl) {
     try {
-      const prevByLocal = new Map(
-        (JSON.parse(localStorage.getItem(LS_REC) || '[]'))
-          .filter(r => r.local && r.photoUrl)
-          .map(r => [String(r.local).trim(), r.photoUrl])
-      );
+      const photoStore = photosGet(); // {local → 1600px} — independiente del Sheet
 
       // Disparar list y ping de versión en paralelo (ping es lectura pura, sin efectos)
       const [res, pingRes] = await Promise.all([
@@ -935,7 +939,7 @@ async function refreshDashboard() {
           photoName:  row.photoName  || '',
           photoThumb: row.photoData  || null,  // 250px del Sheet
           // Preferir: Drive URL del Sheet > 1600px local > null
-          photoUrl:   row.photoUrl   || prevByLocal.get(String(row.local || '').trim()) || null,
+          photoUrl:   row.photoUrl   || photoStore[String(row.local || '').trim()] || null,
         })).filter(r => r.local && !deleted.has(String(r.id)));
         saveLocal();
         const skipped = remote.length - registros.length;
@@ -1038,13 +1042,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function adminDelete(id) {
   openConfirm('Eliminar registro', '¿Eliminar este levantamiento? El local quedará libre para re-ingreso.', () => {
-    blacklistAdd(id);   // persiste en localStorage — evita que el Sheet lo devuelva al sincronizar
+    const rec = registros.find(r => r.id === id);
+    if (rec) photoRemove(rec.local); // limpiar foto 1600px del store
+    blacklistAdd(id);
     registros = registros.filter(r => r.id !== id);
     saveLocal(); renderDashboard(); showToast('🗑 Registro eliminado');
-    // Intentar borrar del Google Sheet también (best-effort, la blacklist cubre si falla)
     if (cfg.webhookUrl) {
       fetch(`${cfg.webhookUrl}?action=delete&id=${encodeURIComponent(id)}`, { cache: 'no-store' })
-        .catch(() => {}); // silencioso — la blacklist garantiza que no reaparezca
+        .catch(() => {});
     }
   });
 }
@@ -1070,7 +1075,8 @@ function deleteAllRecords() {
       //    Así no regresan aunque el GAS falle o no esté actualizado
       allIds.forEach(id => blacklistAdd(id));
 
-      // 3. Limpiar local y re-renderizar
+      // 3. Limpiar local, fotos y re-renderizar
+      photosClear();
       registros = []; saveLocal(); renderDashboard();
 
       // 4. Intentar borrar del Sheet (el GAS debe estar actualizado)
