@@ -365,7 +365,7 @@ function initSheet(sheet) {
   }
 }
 
-// ─ POST: valida → sube Drive → guarda Sheet ──────────────────────────────
+// ─ POST: valida → guarda Sheet → sube Drive → actualiza fila ──────────────────
 function doPost(e) {
   Logger.log('[GAS] ── doPost iniciado ──────────────────────────────────');
 
@@ -393,7 +393,27 @@ function doPost(e) {
     + ' | mime: ' + data.photoMime
     + ' | base64 chars: ' + data.photoB64.length);
 
-  // 3. Subir a Google Drive (bloque propio — error visible y trazable)
+  // 3. Guardar en Sheet PRIMERO — el registro siempre persiste aunque Drive falle
+  var ss, sheet, sheetRow;
+  try {
+    ss    = SpreadsheetApp.getActiveSpreadsheet();
+    sheet = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
+    initSheet(sheet);
+    sheet.appendRow([
+      String(data.id     || ''), String(data.fecha   || ''), String(data.local   || ''),
+      String(data.nombre || ''), String(data.estac   || ''), Number(data.numEst  || 0),
+      String(data.grafica|| ''), String(data.retiro  || ''),
+      String(data.photoName),    'pendiente',                'pendiente'
+    ]);
+    sheetRow = sheet.getLastRow();
+    Logger.log('[GAS] ✅ Sheet fila ' + sheetRow + ' guardada (Drive pendiente)');
+  } catch (sheetErr) {
+    Logger.log('[GAS] ❌ ERROR Sheet: ' + sheetErr.message);
+    return out({ ok: false, uploaded: false,
+                 error: 'Fallo al guardar en Sheet: ' + sheetErr.message });
+  }
+
+  // 4. Subir a Google Drive (bloque propio — error visible y trazable)
   var driveFileId = '';
   var driveUrl    = '';
   try {
@@ -408,31 +428,20 @@ function doPost(e) {
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
     driveUrl = 'https://drive.google.com/uc?export=download&amp;id=' + driveFileId;
     Logger.log('[GAS] ✅ Drive OK → ID: ' + driveFileId);
-    Logger.log('[GAS] ✅ Drive URL: ' + driveUrl);
+
+    // 5. Actualizar la fila con los datos de Drive
+    sheet.getRange(sheetRow, 10).setValue(driveFileId);
+    sheet.getRange(sheetRow, 11).setValue(driveUrl);
+    Logger.log('[GAS] ✅ Fila actualizada con Drive URL');
   } catch (driveErr) {
     Logger.log('[GAS] ❌ ERROR Drive: ' + driveErr.message);
-    return out({ ok: false, uploaded: false,
-                 error: 'Fallo al subir imagen a Drive: ' + driveErr.message });
-  }
-
-  // 4. Guardar en Sheet SOLO si Drive fue exitoso
-  try {
-    var ss    = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
-    initSheet(sheet);
-    sheet.appendRow([
-      String(data.id     || ''), String(data.fecha   || ''), String(data.local   || ''),
-      String(data.nombre || ''), String(data.estac   || ''), Number(data.numEst  || 0),
-      String(data.grafica|| ''), String(data.retiro  || ''),
-      String(data.photoName),    driveFileId,                driveUrl
-    ]);
-    Logger.log('[GAS] ✅ Sheet: fila guardada para local=' + data.local);
-  } catch (sheetErr) {
-    Logger.log('[GAS] ❌ ERROR Sheet: ' + sheetErr.message);
-    // El archivo ya está en Drive — informar éxito parcial
-    return out({ ok: false, uploaded: true,
-                 driveFileId: driveFileId, driveUrl: driveUrl,
-                 error: 'Drive OK pero Sheet falló: ' + sheetErr.message });
+    // Registro YA está en el Sheet — marcar como error en Drive
+    try {
+      sheet.getRange(sheetRow, 10).setValue('drive-error');
+      sheet.getRange(sheetRow, 11).setValue('ERROR: ' + driveErr.message);
+    } catch(_) {}
+    return out({ ok: true, uploaded: false,
+                 error: 'Registro guardado en Sheet. Fallo Drive: ' + driveErr.message });
   }
 
   Logger.log('[GAS] ── doPost completado OK ────────────────────────────');
@@ -952,7 +961,8 @@ function handleSubmit(e) {
   if (!currentPhoto)                      { flashDrop();         ok = false; }
   if (!ok) { showToast('⚠️ Revisa los campos obligatorios marcados en rojo', '#ea1100'); return; }
 
-  const originalFile = currentPhoto.originalFile; // ref ANTES de clearPhoto()
+  const uploadB64  = currentPhoto.uploadB64;   // listo desde processFile, sin async
+  const uploadName = currentPhoto.uploadName;  // nombre .jpg normalizado
 
   const record = {
     id:          Date.now(),
@@ -960,7 +970,7 @@ function handleSubmit(e) {
     local, nombre, estac,
     numEst:      Number(numEst),
     grafica, retiro,
-    photoName:   currentPhoto.name,
+    photoName:   uploadName,
     photoThumb:  currentPhoto.thumb,  // 160px — solo UI local
     driveFileId: '',                  // se llena cuando GAS responde
     driveUrl:    '',                  // se llena cuando GAS responde
@@ -974,27 +984,24 @@ function handleSubmit(e) {
   showSuccessScreen(record, 'syncing');
   showSuccessModal();
 
-  // ─ Subir imagen original a Drive en background ────────────────────────
-  // 1. Codifica el archivo original a base64 (sin canvas, sin pérdida)
-  // 2. Hace POST al GAS; intenta leer la respuesta (CORS) para obtener driveUrl
-  // 3. Si CORS falla usa no-cors (fire & forget); driveUrl aparecerá al refrescar dashboard
+  // ─ Enviar al GAS — uploadB64 ya está listo (generado en processFile) ────────────
+  // El canvas 1920px ya se ejecutó sincrónicamente — no hay FileReader async.
+  // El browser NO puede matar este código porque empieza inmediatamente.
   if (cfg.webhookUrl) {
     (async () => {
       try {
-        const b64 = await fileToBase64(originalFile);
         const payload = {
-          id: record.id, fecha: record.fecha, local: record.local,
-          nombre: record.nombre, estac: record.estac, numEst: record.numEst,
-          grafica: record.grafica, retiro: record.retiro,
-          photoName: record.photoName,
-          photoB64:  b64,                    // archivo original en base64
-          photoMime: originalFile.type,      // mime-type sin alterar
+          id:        record.id,    fecha:    record.fecha,  local:    record.local,
+          nombre:    record.nombre, estac:   record.estac,  numEst:   record.numEst,
+          grafica:   record.grafica, retiro: record.retiro,
+          photoName: uploadName,
+          photoB64:  uploadB64,        // 1920px JPEG ~0.5-2MB en base64
+          photoMime: 'image/jpeg',
         };
 
         let driveUrl    = '';
         let driveFileId = '';
         try {
-          // Intento con CORS — GAS responde con Access-Control-Allow-Origin: *
           const resp = await fetch(cfg.webhookUrl, {
             method: 'POST', mode: 'cors',
             body: JSON.stringify(payload),
@@ -1005,16 +1012,15 @@ function handleSubmit(e) {
             driveUrl    = result.driveUrl;
             driveFileId = result.driveFileId || '';
           }
-          // GAS v4 reporta errores explícitamente — loguearlo siempre
           if (!result.ok) console.warn('[form] GAS error:', result.error || 'sin detalle');
         } catch (_) {
-          // CORS bloqueado (redirect chain de GAS) — fire & forget
+          // CORS bloqueado — fire & forget (el GAS igual procesa el POST)
           await fetch(cfg.webhookUrl, {
             method: 'POST', mode: 'no-cors',
             body: JSON.stringify(payload),
             headers: { 'Content-Type': 'text/plain' },
           });
-          // driveUrl/driveFileId llegarán en el próximo refresh del dashboard
+        }
         }
 
         // Si obtuvimos la URL, actualizamos el registro local ahora mismo
@@ -1040,18 +1046,7 @@ function deletedIds()    { return new Set(JSON.parse(localStorage.getItem(LS_DEL
 function blacklistAdd(id){ const s = deletedIds(); s.add(String(id)); localStorage.setItem(LS_DELETED, JSON.stringify([...s])); }
 function blacklistClear(){ localStorage.removeItem(LS_DELETED); }
 
-/* ─── Codifica un File a base64 puro (sin el prefijo data:...) ───
- * Usa FileReader — no pasa por canvas, cero pérdida de calidad.
- * El GAS recibe el base64 y lo decodifica byte a byte antes de
- * crear el archivo en Drive, preservando el original exacto. */
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload  = () => resolve(r.result.split(',')[1]); // quita 'data:mime;base64,'
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-}
+
 
 /* ─── Store de fotos locales ───
  * {local → {thumb, driveUrl}} — key separado de los registros.
@@ -1435,16 +1430,30 @@ function processFile(file) {
   reader.onload = ev => {
     const img = new Image();
     img.onload = () => {
-      // ── Thumbnail 160px — SOLO para preview UI en tabla ──
-      // El archivo original (file) se envía intacto a Drive, sin pasar por canvas.
+      // ── Thumb 160px — solo preview UI (liviano, ~3 KB) ──────────────────
       const TMAX = 160, tr = Math.min(TMAX / img.width, TMAX / img.height, 1);
       const tc = document.createElement('canvas');
       tc.width = Math.round(img.width * tr); tc.height = Math.round(img.height * tr);
       tc.getContext('2d').drawImage(img, 0, 0, tc.width, tc.height);
       const thumb = tc.toDataURL('image/jpeg', 0.75);
 
-      // Conserva referencia al File original — se envía como base64 al GAS
-      currentPhoto = { name: file.name, size: file.size, type: file.type, thumb, originalFile: file };
+      // ── Upload 1920px JPEG — payload para Drive (~0.5–2 MB) ─────────────
+      // Convierte a JPEG aquí (resuelve HEIC/PNG/WebP), escala para que quepa
+      // en el payload del GAS. Calidad 0.88 = excelente para documentación.
+      // Se genera AHORA (sincrónico) para que esté listo al momento del submit
+      // y no depender de FileReader async que el browser puede matar en background.
+      const UMAX = 1920, ur = Math.min(UMAX / img.width, UMAX / img.height, 1);
+      const uc = document.createElement('canvas');
+      uc.width = Math.round(img.width * ur); uc.height = Math.round(img.height * ur);
+      uc.getContext('2d').drawImage(img, 0, 0, uc.width, uc.height);
+      const uploadDataUrl = uc.toDataURL('image/jpeg', 0.88);
+      const uploadB64  = uploadDataUrl.split(',')[1];               // sin prefijo data:...
+      const uploadName = file.name.replace(/\.[^.]+$/, '') + '.jpg'; // siempre .jpg
+
+      currentPhoto = {
+        name: file.name, size: file.size, type: 'image/jpeg',
+        thumb, uploadB64, uploadName,
+      };
       document.getElementById('photoThumb').src = thumb;
       document.getElementById('photoName').textContent = file.name;
       document.getElementById('photoSize').textContent = fmtBytes(file.size);
