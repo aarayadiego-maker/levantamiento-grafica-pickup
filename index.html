@@ -682,6 +682,7 @@ const LS_PHOTOS  = 'pop_v5_thumbs';  // {local → {thumb, driveUrl}} — key pr
 let registros    = JSON.parse(localStorage.getItem(LS_REC) || '[]');
 let currentPhoto = null;
 let isAdmin      = false;
+let remoteLocals = new Set(); // locales ya levantados en CUALQUIER dispositivo (cargado del Sheet)
 
 /**
  * cfg: fuente única de verdad para la configuración.
@@ -701,6 +702,9 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshAdminBaseStatus();
   updateWebhookUI();
   if (cfg.webhookUrl) document.getElementById('webhookInput').value = cfg.webhookUrl;
+
+  // Carga en background los locales ya levantados en cualquier dispositivo
+  loadRemoteLocals();
 
   const fl = document.getElementById('fLocal');
   fl.addEventListener('blur',  validateLocalBlur);
@@ -924,7 +928,7 @@ function validateLocalBlur() {
   if (!v) return;
   if (cfg.locales.length && !cfg.locales.includes(v))
     return setLocalMsg(`❌ El local ${v} no existe en la base.`, true);
-  if (registros.find(r => r.local === v))
+  if (registros.find(r => r.local === v) || remoteLocals.has(v))
     return setLocalMsg('🔒 Este local ya tiene levantamiento registrado.', true);
   if (cfg.locales.includes(v))
     setLocalMsg('✅ Local válido.', false);
@@ -951,7 +955,7 @@ function handleSubmit(e) {
   if (!local) { markErr('fLocal'); ok = false; }
   else if (cfg.locales.length && !cfg.locales.includes(local)) {
     markErr('fLocal'); setLocalMsg(`❌ El local ${local} no existe en la base.`, true); ok = false;
-  } else if (registros.find(r => r.local === local)) {
+  } else if (registros.find(r => r.local === local) || remoteLocals.has(local)) {
     markErr('fLocal'); setLocalMsg('🔒 Este local ya tiene levantamiento registrado.', true); ok = false;
   }
   if (!estac)                             { markErr('fEstac');   ok = false; }
@@ -977,7 +981,8 @@ function handleSubmit(e) {
   };
 
   registros.push(record);
-  photoSave(local, currentPhoto.thumb, ''); // thumb local; driveUrl llega del GAS
+  remoteLocals.add(local); // bloqueo inmediato — evita re-envío desde este dispositivo
+  photoSave(local, currentPhoto.thumb, '');
   saveLocal();
   e.target.reset();
   clearPhoto();
@@ -1113,6 +1118,8 @@ async function refreshDashboard() {
         if (mapped.length > 0 || registros.length === 0) {
           registros = mapped;
           saveLocal();
+          // Sincronizar remoteLocals con lo que hay en el Sheet
+          remoteLocals = new Set(mapped.map(r => r.local).filter(Boolean));
         }
         const skipped = remote.length - (mapped.length);
         showToast(`✅ ${registros.length} registro(s) cargados${skipped > 0 ? ` (⛔ ${skipped} eliminados filtrados)` : ''}`, '#2a8703');
@@ -1145,20 +1152,20 @@ function renderTable() {
   data.forEach(r => {
     const tr = document.createElement('tr');
     tr.className = 'hover:bg-blue-50 transition-colors';
+    // thumbSrc: primero localStorage (instantáneo), luego Drive thumbnail (público)
+    const thumbSrc = r.photoThumb || driveThumbUrl(r);
     // IMPORTANTE: NO embeber base64 en atributos onclick — el browser los trunca.
     // Se usa data-id y event delegation; la foto se busca en registros[] al clickear.
     tr.innerHTML = `
-      <td class="px-2 py-1.5">${r.photoThumb
+      <td class="px-2 py-1.5">${thumbSrc
         ? `<div class="flex items-center gap-1.5">
-            <img src="${r.photoThumb}"
+            <img src="${thumbSrc}"
                  class="w-10 h-10 object-cover rounded-lg border cursor-zoom-in flex-shrink-0 zoom-img"
                  data-id="${r.id}" title="Click para ampliar" />
             <a href="#" class="text-wb hover:text-blue-700 text-base dl-img" data-id="${r.id}"
                title="${r.driveUrl ? 'Descargar original de Drive' : 'Subiendo a Drive…'}">${r.driveUrl ? '⬇️' : '⏳'}</a>
           </div>`
-        : r.driveUrl
-          ? `<a href="${r.driveUrl}" target="_blank" class="text-wb underline text-[10px]">⬇️ Drive</a>`
-          : '<span class="text-gray-300">—</span>'}</td>
+        : '<span class="text-gray-300">—</span>'}</td>
       <td class="px-2 py-1.5 text-gray-400 whitespace-nowrap text-[10px]">${r.fecha}</td>
       <td class="px-2 py-1.5 font-bold">${esc(r.local)}</td>
       <td class="px-2 py-1.5 max-w-[90px] truncate">${esc(r.nombre) || '—'}</td>
@@ -1185,7 +1192,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const zoomEl = e.target.closest('.zoom-img');
     if (zoomEl) {
       const rec = registros.find(r => String(r.id) === zoomEl.dataset.id);
-      if (rec) lightbox(rec.photoThumb, rec.photoName, rec.driveUrl || null);
+      if (rec) {
+        // photoThumb: preview local | driveThumbUrl: fallback para registros de otro dispositivo
+        const src = rec.photoThumb || driveThumbUrl(rec);
+        if (src) lightbox(src, rec.photoName, rec.driveUrl || null);
+      }
       return;
     }
     // Descarga — click en botón ⬇️
@@ -1218,7 +1229,10 @@ document.addEventListener('DOMContentLoaded', () => {
 function adminDelete(id) {
   openConfirm('Eliminar registro', '¿Eliminar este levantamiento? El local quedará libre para re-ingreso.', () => {
     const rec = registros.find(r => r.id === id);
-    if (rec) photoRemove(rec.local); // limpiar foto 1600px del store
+    if (rec) {
+      photoRemove(rec.local);
+      remoteLocals.delete(rec.local); // libera el local para que pueda re-ingresarse
+    }
     blacklistAdd(id);
     registros = registros.filter(r => r.id !== id);
     saveLocal(); renderDashboard(); showToast('🗑 Registro eliminado');
@@ -1252,7 +1266,7 @@ function deleteAllRecords() {
 
       // 3. Limpiar local, fotos y re-renderizar
       photosClear();
-      registros = []; saveLocal(); renderDashboard();
+      registros = []; remoteLocals = new Set(); saveLocal(); renderDashboard();
 
       // 4. Intentar borrar del Sheet (el GAS debe estar actualizado)
       if (cfg.webhookUrl) {
@@ -1476,6 +1490,34 @@ const saveLocal = () => {
   try { localStorage.setItem(LS_REC, JSON.stringify(registros)); }
   catch { showToast('⚠️ Almacenamiento lleno — exporta y limpia', '#ea1100'); }
 };
+
+/* Devuelve URL de miniatura de Drive (públicamente accesible si el archivo está compartido)
+ * Usa la API de thumbnail de Google que no requiere autenticación adicional. */
+function driveThumbUrl(r) {
+  const fid = r.driveFileId
+    && r.driveFileId !== 'pendiente'
+    && r.driveFileId !== 'drive-error'
+    ? r.driveFileId : null;
+  if (fid) return `https://drive.google.com/thumbnail?id=${fid}&sz=w160`;
+  // Fallback: extraer ID de la driveUrl si está disponible
+  const m = r.driveUrl && r.driveUrl.match(/[?&]id=([^&]+)/);
+  return m ? `https://drive.google.com/thumbnail?id=${m[1]}&sz=w160` : null;
+}
+
+/* Carga desde el GAS la lista de locales ya levantados en cualquier dispositivo.
+ * Se llama al iniciar — no bloquea UI si el GAS no responde. */
+async function loadRemoteLocals() {
+  if (!cfg.webhookUrl) return;
+  try {
+    const resp = await fetch(`${cfg.webhookUrl}?action=list`, {
+      mode: 'cors', cache: 'no-store',
+    });
+    const rows = await resp.json();
+    if (Array.isArray(rows)) {
+      remoteLocals = new Set(rows.map(r => String(r.local || '').trim()).filter(Boolean));
+    }
+  } catch (_) { /* silencioso — el formulario sigue funcionando sin esto */ }
+}
 
 function markErr(id) {
   const el = document.getElementById(id); el.classList.add('fi-err');
