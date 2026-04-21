@@ -287,7 +287,19 @@
         </button>
       </div>
     </div>
-    <div id="dashLoading" class="hidden text-center py-6 text-gray-400 text-sm animate-pulse">⏳ Cargando registros…</div>
+    <!-- Banner GAS desactualizado: se muestra si el deploy no tiene action=delete -->
+<div id="gasBanner" class="hidden mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-800 space-y-1">
+  <p class="font-bold text-sm">⚠️ Tu Google Apps Script está desactualizado</p>
+  <p>Los registros eliminados siguen vivos en el Sheet y volverán al sincronizar desde otro dispositivo. Para corregirlo:</p>
+  <ol class="list-decimal pl-4 space-y-0.5 mt-1">
+    <li>Abre tu <strong>Google Apps Script</strong> (el mismo que deployaste antes).</li>
+    <li>Borra todo el código y pega el que aparece más abajo en esta página.</li>
+    <li>Ve a <strong>Implementar → Administrar implementaciones → ✏️ editar → Nueva versión → Implementar</strong>.</li>
+    <li>La URL no cambia — no necesitas actualizar nada más.</li>
+  </ol>
+  <button onclick="document.getElementById('gasBanner').classList.add('hidden')" class="mt-1 underline text-red-600">Cerrar este aviso</button>
+</div>
+<div id="dashLoading" class="hidden text-center py-6 text-gray-400 text-sm animate-pulse">⏳ Cargando registros…</div>
 
     <!-- ── Importar respuestas ── -->
     <!-- (removido: ahora los registros llegan en tiempo real vía webhook) -->
@@ -874,17 +886,29 @@ async function refreshDashboard() {
 
   if (cfg.webhookUrl) {
     try {
-      // Preservar photoUrl (1600px base64) de registros locales antes de sobreescribir.
-      // refreshDashboard() reemplaza registros[] con los del Sheet (que no tienen Drive URL),
-      // lo que borraba el 1600px guardado en localStorage al hacer saveLocal().
       const prevByLocal = new Map(
         (JSON.parse(localStorage.getItem(LS_REC) || '[]'))
           .filter(r => r.local && r.photoUrl)
           .map(r => [String(r.local).trim(), r.photoUrl])
       );
 
-      // Siempre cargar 100% desde Google Sheets — fuente de verdad única
-      const res    = await fetch(`${cfg.webhookUrl}?action=list`, { cache: 'no-store' });
+      // Disparar list y probe de versión del GAS en paralelo
+      const [res, probeRes] = await Promise.all([
+        fetch(`${cfg.webhookUrl}?action=list`, { cache: 'no-store' }),
+        fetch(`${cfg.webhookUrl}?action=delete&id=__probe__`, { cache: 'no-store' }).catch(() => null),
+      ]);
+
+      // Detectar si el GAS tiene action=delete (versión actualizada)
+      let gasHasDelete = false;
+      if (probeRes) {
+        try {
+          const probe = await probeRes.json();
+          // GAS viejo devuelve error:'action desconocida'; nuevo devuelve ok:true/deleted:false
+          gasHasDelete = !(probe.error === 'action desconocida');
+        } catch (_) {}
+      }
+      document.getElementById('gasBanner').classList.toggle('hidden', gasHasDelete);
+
       const remote = await res.json();
       if (Array.isArray(remote)) {
         const deleted = deletedIds(); // IDs que el admin eliminó — no deben volver del Sheet
