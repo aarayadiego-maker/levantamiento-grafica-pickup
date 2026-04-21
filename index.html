@@ -345,23 +345,34 @@
 const SHEET_NAME = 'Respuestas';
 const FOLDER_ID  = '1lEeX-U5l3syy_46KqzfTt-8eKRzPXnj2';
 const HEADERS    = ['ID','Fecha','Local','Nombre','Estacionamientos','N° Est.',
-                    'Gráfica','Retiro','Foto','Drive File ID','Drive URL'];
+                    'Gráfica','Retiro','Foto','Drive File ID','Drive URL','Thumb'];
 
-// ─ Retorna la carpeta Drive por ID ───────────────────────────────────────
+// ─ Retorna la carpeta Drive por ID ───────────────────────────────────────────
 function getFolder() {
   var folder = DriveApp.getFolderById(FOLDER_ID);
   Logger.log('[GAS] Carpeta: ' + folder.getName() + ' (ID: ' + FOLDER_ID + ')');
   return folder;
 }
 
-// ─ Inicializa cabeceras si la hoja está vacía ────────────────────────────
+// ─ Inicializa o migra cabeceras ───────────────────────────────────────────────
 function initSheet(sheet) {
   if (sheet.getLastRow() === 0) {
+    // Sheet vacío — crear cabeceras completas
     sheet.appendRow(HEADERS);
     sheet.getRange(1, 1, 1, HEADERS.length)
          .setFontWeight('bold').setBackground('#0053e2').setFontColor('#ffffff');
     sheet.setFrozenRows(1);
-    Logger.log('[GAS] Hoja inicializada con cabeceras.');
+    Logger.log('[GAS] Hoja inicializada con ' + HEADERS.length + ' columnas.');
+  } else {
+    // Sheet existente — agregar columna Thumb si no existe (migración automática)
+    var existing = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    if (existing.indexOf('Thumb') === -1) {
+      var col = sheet.getLastColumn() + 1;
+      var cell = sheet.getRange(1, col);
+      cell.setValue('Thumb').setFontWeight('bold')
+          .setBackground('#0053e2').setFontColor('#ffffff');
+      Logger.log('[GAS] Columna Thumb agregada en col ' + col);
+    }
   }
 }
 
@@ -403,7 +414,8 @@ function doPost(e) {
       String(data.id     || ''), String(data.fecha   || ''), String(data.local   || ''),
       String(data.nombre || ''), String(data.estac   || ''), Number(data.numEst  || 0),
       String(data.grafica|| ''), String(data.retiro  || ''),
-      String(data.photoName),    'pendiente',                'pendiente'
+      String(data.photoName),    'pendiente',                'pendiente',
+      String(data.photoThumb || '')   // thumbnail 160px JPEG — siempre disponible en dashboard
     ]);
     sheetRow = sheet.getLastRow();
     Logger.log('[GAS] ✅ Sheet fila ' + sheetRow + ' guardada (Drive pendiente)');
@@ -475,8 +487,9 @@ function doGet(e) {
           grafica:     String(o['Gráfica']           || ''),
           retiro:      String(o['Retiro']            || ''),
           photoName:   String(o['Foto']              || ''),
-          driveFileId: String(o['Drive File ID'] || ''),
-          driveUrl:    String(o['Drive URL']     || ''),
+          driveFileId: String(o['Drive File ID']     || ''),
+          driveUrl:    String(o['Drive URL']         || ''),
+          photoThumb:  String(o['Thumb']             || ''),  // thumbnail 160px guardado en Sheet
         };
       }));
     }
@@ -999,9 +1012,10 @@ function handleSubmit(e) {
           id:        record.id,    fecha:    record.fecha,  local:    record.local,
           nombre:    record.nombre, estac:   record.estac,  numEst:   record.numEst,
           grafica:   record.grafica, retiro: record.retiro,
-          photoName: uploadName,
-          photoB64:  uploadB64,        // 1920px JPEG ~0.5-2MB en base64
-          photoMime: 'image/jpeg',
+          photoName:  uploadName,
+          photoThumb: record.photoThumb,  // thumbnail 160px — se guarda en Sheet para dashboard
+          photoB64:   uploadB64,          // 1920px JPEG ~0.5-2MB — va a Drive
+          photoMime:  'image/jpeg',
         };
 
         let driveUrl    = '';
@@ -1106,7 +1120,7 @@ async function refreshDashboard() {
             grafica:    row.grafica    || '',
             retiro:     row.retiro     || '',
             photoName:  row.photoName  || '',
-            photoThumb:  ls.thumb || row.photoData || null,
+            photoThumb:  row.photoThumb || ls.thumb || null, // Sheet > localStorage > nada
             driveFileId: row.driveFileId || '',
             driveUrl:    row.driveUrl   || ls.driveUrl || '',
           };
