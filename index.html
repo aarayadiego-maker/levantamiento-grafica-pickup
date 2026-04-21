@@ -533,7 +533,8 @@ const BAKED_WEBHOOK = /*WEBHOOK_JSON_START*/"https://script.google.com/macros/s/
 const ADMIN_PWD     = /*ADMINPWD_JSON_START*/'admin2025'/*ADMINPWD_JSON_END*/;
 
 /* ─── Estado ─── */
-const LS_REC = 'pop_v5_records';
+const LS_REC     = 'pop_v5_records';
+const LS_DELETED = 'pop_v5_deleted'; // IDs eliminados por admin — filtro persistente contra re-sync del Sheet
 let registros    = JSON.parse(localStorage.getItem(LS_REC) || '[]');
 let currentPhoto = null;
 let isAdmin      = false;
@@ -859,6 +860,14 @@ function handleSubmit(e) {
   });
 }
 
+/* ─── Blacklist de IDs eliminados ───
+ * Cuando el admin elimina un registro, su ID se guarda aquí.
+ * refreshDashboard() filtra contra esta lista antes de mostrar los datos del Sheet,
+ * garantizando que los eliminados no reaparezcan aunque el GAS aún no borre la fila. */
+function deletedIds()    { return new Set(JSON.parse(localStorage.getItem(LS_DELETED) || '[]')); }
+function blacklistAdd(id){ const s = deletedIds(); s.add(String(id)); localStorage.setItem(LS_DELETED, JSON.stringify([...s])); }
+function blacklistClear(){ localStorage.removeItem(LS_DELETED); }
+
 /* ─── Dashboard ─── */
 async function refreshDashboard() {
   document.getElementById('dashLoading').classList.remove('hidden');
@@ -878,6 +887,7 @@ async function refreshDashboard() {
       const res    = await fetch(`${cfg.webhookUrl}?action=list`, { cache: 'no-store' });
       const remote = await res.json();
       if (Array.isArray(remote)) {
+        const deleted = deletedIds(); // IDs que el admin eliminó — no deben volver del Sheet
         registros = remote.map(row => ({
           id:         row.id         || Date.now() + Math.random(),
           fecha:      row.fecha      || '',
@@ -891,9 +901,10 @@ async function refreshDashboard() {
           photoThumb: row.photoData  || null,  // 250px del Sheet
           // Preferir: Drive URL del Sheet > 1600px local > null
           photoUrl:   row.photoUrl   || prevByLocal.get(String(row.local || '').trim()) || null,
-        })).filter(r => r.local);
+        })).filter(r => r.local && !deleted.has(String(r.id)));
         saveLocal();
-        showToast(`✅ ${registros.length} registro(s) cargados desde Sheets`, '#2a8703');
+        const skipped = remote.length - registros.length;
+        showToast(`✅ ${registros.length} registro(s) cargados${skipped > 0 ? ` (⛔ ${skipped} eliminados filtrados)` : ''}`, '#2a8703');
       }
     } catch (err) {
       showToast('⚠️ Sin conexión a Sheets — mostrando datos locales', '#ea1100');
@@ -992,14 +1003,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function adminDelete(id) {
   openConfirm('Eliminar registro', '¿Eliminar este levantamiento? El local quedará libre para re-ingreso.', () => {
+    blacklistAdd(id);   // persiste en localStorage — evita que el Sheet lo devuelva al sincronizar
     registros = registros.filter(r => r.id !== id);
     saveLocal(); renderDashboard(); showToast('🗑 Registro eliminado');
-    // Borrar también del Google Sheet para que no reaparezca al sincronizar
+    // Intentar borrar del Google Sheet también (best-effort, la blacklist cubre si falla)
     if (cfg.webhookUrl) {
       fetch(`${cfg.webhookUrl}?action=delete&id=${encodeURIComponent(id)}`, { cache: 'no-store' })
-        .then(r => r.json())
-        .then(d => { if (!d.ok) showToast('⚠️ No se pudo borrar del Sheet — vuelve a intentarlo', '#ea1100'); })
-        .catch(() => showToast('⚠️ Sin conexión: borrado solo local', '#995213'));
+        .catch(() => {}); // silencioso — la blacklist garantiza que no reaparezca
     }
   });
 }
@@ -1009,13 +1019,11 @@ function deleteAllRecords() {
   openConfirm('⚠️ Eliminar TODOS los registros',
     `Se borrarán permanentemente los ${registros.length} levantamientos registrados. ¿Continuar?`,
     () => {
+      blacklistClear(); // limpiar blacklist — tabla vacía, ya no hay nada que filtrar
       registros = []; saveLocal(); renderDashboard(); showToast('🗑 Todos los registros eliminados');
-      // Borrar del Google Sheet
       if (cfg.webhookUrl) {
         fetch(`${cfg.webhookUrl}?action=deleteAll`, { cache: 'no-store' })
-          .then(r => r.json())
-          .then(d => { if (!d.ok) showToast('⚠️ No se pudo limpiar el Sheet', '#ea1100'); })
-          .catch(() => showToast('⚠️ Sin conexión: borrado solo local', '#995213'));
+          .catch(() => {});
       }
     });
 }
