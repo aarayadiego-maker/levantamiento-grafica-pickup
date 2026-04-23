@@ -98,8 +98,8 @@
 
       <!-- 2. Nombre -->
       <div>
-        <label class="fl" for="fNombre">Nombre <span class="text-gray-400 font-normal">(solo encargados OMNI)</span></label>
-        <input type="text" id="fNombre" maxlength="100" placeholder="Nombre encargado OMNI" class="fi">
+        <label class="fl" for="fNombre">Nombre <span class="text-gray-400 font-normal">(Gerente de venta o encargado de local)</span></label>
+        <input type="text" id="fNombre" maxlength="100" placeholder="Nombre gerente de venta o encargado de local" class="fi">
       </div>
 
       <!-- 3+4. Estacionamiento -->
@@ -131,12 +131,34 @@
       <!-- 6. ¿Dónde retira? -->
       <div>
         <label class="fl" for="fRetiro">¿Dónde retira el pedido el cliente en tu local? <span class="text-wr">*</span></label>
-        <select id="fRetiro" class="fi">
+        <select id="fRetiro" class="fi" onchange="toggleRetiroOtro()">
           <option value="">— Selecciona —</option>
           <option>En estacionamiento y/o SAC</option>
           <option>Solo en estacionamiento</option>
           <option>Solo en SAC</option>
+          <option value="Otro">Otro</option>
         </select>
+      </div>
+
+      <!-- 6b. Retiro: Otro — se despliega solo si se selecciona "Otro" -->
+      <div id="retiroOtroSection" class="hidden space-y-3 border border-blue-100 bg-blue-50 rounded-xl p-4">
+        <div>
+          <label class="fl" for="fRetiroOtroDesc">¿Dónde se retira el pedido en tu local? <span class="text-wr">*</span></label>
+          <textarea id="fRetiroOtroDesc" rows="2" maxlength="300"
+            placeholder="Describe el lugar de retiro..."
+            class="fi resize-none"></textarea>
+        </div>
+        <div>
+          <label class="fl">Foto(s) del lugar de retiro</label>
+          <label id="retiroOtroFotoBtn"
+            class="flex items-center gap-2 cursor-pointer w-fit px-4 py-2 rounded-lg border border-blue-300
+                   bg-white text-blue-700 text-sm font-medium hover:bg-blue-50 transition-colors">
+            📎 Adjuntar foto(s)
+            <input type="file" id="fRetiroOtroFotos" accept="image/*" multiple class="hidden"
+                   onchange="handleRetiroOtroFotos(event)">
+          </label>
+          <div id="retiroOtroPreview" class="flex flex-wrap gap-2 mt-2"></div>
+        </div>
       </div>
 
       <!-- 7. Foto + fotos de referencia -->
@@ -959,7 +981,9 @@ function handleSubmit(e) {
   const estac   = document.getElementById('fEstac').value;
   const numEst  = document.getElementById('fNumEst').value;
   const grafica = document.getElementById('fGrafica').value;
-  const retiro  = document.getElementById('fRetiro').value;
+  const retiroSel  = document.getElementById('fRetiro').value;
+  const retiroDesc  = document.getElementById('fRetiroOtroDesc').value.trim();
+  const retiro      = retiroSel === 'Otro' ? 'Otro: ' + retiroDesc : retiroSel;
   let ok = true;
 
   if (!local) { markErr('fLocal'); ok = false; }
@@ -971,7 +995,8 @@ function handleSubmit(e) {
   if (!estac)                             { markErr('fEstac');   ok = false; }
   if (numEst === '' || Number(numEst) < 0){ markErr('fNumEst'); ok = false; }
   if (!grafica)                           { markErr('fGrafica'); ok = false; }
-  if (!retiro)                            { markErr('fRetiro');  ok = false; }
+  if (!retiroSel)                            { markErr('fRetiro');  ok = false; }
+  else if (retiroSel === 'Otro' && !retiroDesc) { markErr('fRetiroOtroDesc'); ok = false; }
   if (!currentPhoto)                      { flashDrop();         ok = false; }
   if (!ok) { showToast('⚠️ Revisa los campos obligatorios marcados en rojo', '#ea1100'); return; }
 
@@ -1380,6 +1405,12 @@ function copyResponseCode() {
 function resetForNewSubmit() {
   document.getElementById('successScreen').classList.add('hidden');
   document.getElementById('popForm').classList.remove('hidden');
+  // Limpiar sección "Otro" de retiro
+  document.getElementById('fRetiro').value = '';
+  document.getElementById('retiroOtroSection').classList.add('hidden');
+  document.getElementById('fRetiroOtroDesc').value = '';
+  document.getElementById('retiroOtroPreview').innerHTML = '';
+  retiroOtroFotos = [];
   document.getElementById('fLocal').focus();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -1446,6 +1477,51 @@ function generateHTML() {
   a.click();
   URL.revokeObjectURL(a.href);
   showToast('⬇️ HTML descargado — republica el link con share-puppy');
+}
+
+/* ─── Retiro: Otro ─── */
+let retiroOtroFotos = [];  // [{name, b64, thumb}] — fotos adjuntas en sección "Otro"
+
+function toggleRetiroOtro() {
+  const val     = document.getElementById('fRetiro').value;
+  const section = document.getElementById('retiroOtroSection');
+  section.classList.toggle('hidden', val !== 'Otro');
+  if (val !== 'Otro') {
+    document.getElementById('fRetiroOtroDesc').value = '';
+    retiroOtroFotos = [];
+    document.getElementById('retiroOtroPreview').innerHTML = '';
+  }
+}
+
+function handleRetiroOtroFotos(e) {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+  const preview = document.getElementById('retiroOtroPreview');
+  files.forEach(file => {
+    if (!file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const b64  = ev.target.result.split(',')[1];
+      const thumb = ev.target.result;              // data URL completa para preview
+      retiroOtroFotos.push({ name: file.name, b64, mime: file.type, thumb });
+      // Miniatura en UI
+      const wrap = document.createElement('div');
+      wrap.className = 'relative';
+      wrap.innerHTML = `
+        <img src="${thumb}" class="w-16 h-16 object-cover rounded-lg border border-blue-200" title="${file.name}">
+        <button type="button" onclick="removeRetiroFoto(${retiroOtroFotos.length - 1}, this)"
+          class="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-4 h-4
+                 text-[10px] leading-none flex items-center justify-center">×</button>`;
+      preview.appendChild(wrap);
+    };
+    reader.readAsDataURL(file);
+  });
+  e.target.value = '';  // permite re-seleccionar los mismos archivos
+}
+
+function removeRetiroFoto(idx, btn) {
+  retiroOtroFotos[idx] = null;   // marcar como eliminada sin reindexar
+  btn.closest('div').remove();
 }
 
 /* ─── Foto usuario ─── */
