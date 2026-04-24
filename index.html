@@ -266,9 +266,9 @@
       <p class="text-3xl font-bold" id="kpiPend">0</p>
       <p class="text-green-200 text-xs mt-1">Pendientes</p>
     </div>
-    <div class="bg-gray-700 text-white rounded-2xl p-4 shadow text-center">
-      <p class="text-3xl font-bold" id="kpiEst">0</p>
-      <p class="text-gray-300 text-xs mt-1">Est. totales</p>
+    <div class="bg-ws text-gray-900 rounded-2xl p-4 shadow text-center">
+      <p class="text-3xl font-bold" id="kpiAvance">—</p>
+      <p class="text-yellow-900 text-xs mt-1">% Avance</p>
     </div>
   </div>
 
@@ -1231,7 +1231,10 @@ function renderDashboard() {
   document.getElementById('kpiTotal').textContent = registros.length;
   document.getElementById('kpiBase').textContent  = cfg.locales.length;
   document.getElementById('kpiPend').textContent  = Math.max(0, cfg.locales.length - registros.length);
-  document.getElementById('kpiEst').textContent   = registros.reduce((s, r) => s + (r.numEst || 0), 0);
+  const pct = cfg.locales.length
+    ? Math.round((registros.length / cfg.locales.length) * 1000) / 10
+    : null;
+  document.getElementById('kpiAvance').textContent = pct !== null ? pct + '%' : '—';
   renderTable();
 }
 
