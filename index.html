@@ -411,10 +411,32 @@ function doPost(e) {
   var data;
   try {
     data = JSON.parse(e.postData.contents);
-    Logger.log('[GAS] Payload: id=' + data.id + ' | local=' + data.local);
+    Logger.log('[GAS] Payload: id=' + data.id + ' | local=' + data.local
+              + ' | extraOnly=' + (data.extraOnly || false));
   } catch (parseErr) {
     Logger.log('[GAS] ERROR parse: ' + parseErr.message);
     return out({ ok: false, error: 'JSON inválido: ' + parseErr.message });
+  }
+
+  // ── Rama especial: sólo subir foto a Drive, sin tocar el Sheet ──────────────
+  if (data.extraOnly) {
+    if (!data.photoB64 || !data.photoName) {
+      return out({ ok: false, error: 'extraOnly: faltan photoB64 / photoName' });
+    }
+    try {
+      var folder = getFolder();
+      var bytes  = Utilities.base64Decode(data.photoB64);
+      var blob   = Utilities.newBlob(bytes, data.photoMime || 'image/jpeg', data.photoName);
+      var file   = folder.createFile(blob);
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      var fid = file.getId();
+      Logger.log('[GAS] ✅ extraOnly OK → ' + data.photoName + ' | ' + fid);
+      return out({ ok: true, driveFileId: fid,
+        driveUrl: 'https://drive.google.com/uc?export=download&amp;id=' + fid });
+    } catch (err) {
+      Logger.log('[GAS] ❌ extraOnly error: ' + err.message);
+      return out({ ok: false, error: err.message });
+    }
   }
 
   // 2. Guardar en Sheet PRIMERO — el registro persiste aunque Drive falle
@@ -477,30 +499,8 @@ function doPost(e) {
     return out({ ok: true, driveError: driveErr.message });
   }
 
-  Logger.log('[GAS] ── doPost completado OK ────────────────────────');
-
-  // 5. Subir fotos extra (sección "Otro") — sin crear nuevas filas en el Sheet
-  var extraFileIds = [];
-  if (data.extraPhotos && data.extraPhotos.length) {
-    var folder2 = getFolder();
-    data.extraPhotos.forEach(function(ep) {
-      try {
-        var eb    = Utilities.base64Decode(ep.b64);
-        var eBlob = Utilities.newBlob(eb, ep.mime || 'image/jpeg', ep.name);
-        var eFile = folder2.createFile(eBlob);
-        eFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-        extraFileIds.push({ name: ep.name, id: eFile.getId(),
-          url: 'https://drive.google.com/uc?export=download&amp;id=' + eFile.getId() });
-        Logger.log('[GAS] ✅ Extra foto OK → ' + ep.name + ' | ' + eFile.getId());
-      } catch(eErr) {
-        Logger.log('[GAS] ❌ Extra foto fallo: ' + ep.name + ' | ' + eErr.message);
-        extraFileIds.push({ name: ep.name, error: eErr.message });
-      }
-    });
-  }
-
-  return out({ ok: true, driveFileId: driveFileId, driveUrl: driveUrl,
-               extraFiles: extraFileIds });
+  Logger.log('[GAS] ── doPost completado OK ────────────────────');
+  return out({ ok: true, driveFileId: driveFileId, driveUrl: driveUrl });
 }
 
 // ─ GET: ping / list / delete / deleteAll ─────────────────────────────────
@@ -1039,72 +1039,94 @@ function handleSubmit(e) {
   };
 
   registros.push(record);
-  remoteLocals.add(local); // bloqueo inmediato — evita re-envío desde este dispositivo
+  remoteLocals.add(local);
   photoSave(local, currentPhoto.thumb, '');
   saveLocal();
+
+  // ── Snapshot fotos "Otro" ANTES de reset para evitar race-condition ────────
+  const extrasSnapshot = retiroOtroFotos
+    .filter(f => f !== null)
+    .map((f, i, arr) => ({
+      name: arr.length === 1 ? `Otro_${local}.jpg` : `Otro_${local}_${i + 1}.jpg`,
+      b64:  f.b64,
+      mime: f.mime,
+    }));
+
   e.target.reset();
   clearPhoto();
   showSuccessScreen(record, 'syncing');
   showSuccessModal();
 
-  // ─ Enviar al GAS — uploadB64 ya está listo (generado en processFile) ────────────
-  // El canvas 1920px ya se ejecutó sincrónicamente — no hay FileReader async.
-  // El browser NO puede matar este código porque empieza inmediatamente.
+  // ─ Enviar al GAS ──────────────────────────────────────────────────────────
   if (cfg.webhookUrl) {
     (async () => {
-      try {
-        const payload = {
-          id:        record.id,    fecha:    record.fecha,  local:    record.local,
-          nombre:    record.nombre, estac:   record.estac,  numEst:   record.numEst,
-          grafica:   record.grafica, retiro: record.retiro,
-          photoName: uploadName,
-          photoB64:  uploadB64,   // JPEG full-res — va a Drive
-          photoMime: 'image/jpeg',
-          // Fotos extra de sección "Otro" — nombradas Otro_N°local[_N]
-          extraPhotos: retiroOtroFotos
-            .filter(f => f !== null)
-            .map((f, i, arr) => ({
-              name: arr.length === 1 ? `Otro_${local}.jpg` : `Otro_${local}_${i + 1}.jpg`,
-              b64:  f.b64,
-              mime: f.mime,
-            })),
-        };
-
-        let driveUrl    = '';
-        let driveFileId = '';
+      // Función auxiliar: POST JSON → GAS, reintentar con no-cors si falla
+      const gasPost = async (body) => {
         try {
-          const resp = await fetch(cfg.webhookUrl, {
+          const r = await fetch(cfg.webhookUrl, {
             method: 'POST', mode: 'cors',
-            body: JSON.stringify(payload),
+            body: JSON.stringify(body),
             headers: { 'Content-Type': 'text/plain' },
           });
-          const result = await resp.json();
-          if (result.uploaded && result.driveUrl) {
-            driveUrl    = result.driveUrl;
-            driveFileId = result.driveFileId || '';
-          }
-          if (!result.ok) console.warn('[form] GAS error:', result.error || 'sin detalle');
+          return await r.json();
         } catch (_) {
-          // CORS bloqueado — fire & forget (el GAS igual procesa el POST)
           await fetch(cfg.webhookUrl, {
             method: 'POST', mode: 'no-cors',
-            body: JSON.stringify(payload),
+            body: JSON.stringify(body),
             headers: { 'Content-Type': 'text/plain' },
+          });
+          return null;   // no-cors no devuelve body
+        }
+      };
+
+      try {
+        // 1. POST principal (foto estacionamiento + Sheet row)
+        const result = await gasPost({
+          id:        record.id,    fecha:   record.fecha,   local:   record.local,
+          nombre:    record.nombre, estac:  record.estac,   numEst:  record.numEst,
+          grafica:   record.grafica, retiro: record.retiro,
+          photoName: uploadName,
+          photoB64:  uploadB64,
+          photoMime: 'image/jpeg',
+        });
+
+        if (result?.ok && result.driveFileId) {
+          const idx = registros.findIndex(r => r.id === record.id);
+          if (idx !== -1) {
+            registros[idx].driveUrl    = result.driveUrl    || '';
+            registros[idx].driveFileId = result.driveFileId || '';
+          }
+          photoSave(local, record.photoThumb, result.driveUrl || '');
+          saveLocal();
+        } else if (result && !result.ok) {
+          console.warn('[form] GAS error principal:', result.error || 'sin detalle');
+        }
+
+        // 2. POSTs individuales por cada foto "Otro" (extraOnly=true → sin fila Sheet)
+        if (extrasSnapshot.length) {
+          console.log(`[form] Subiendo ${extrasSnapshot.length} foto(s) Otro a Drive...`);
+          const extraResults = await Promise.allSettled(
+            extrasSnapshot.map(ep => gasPost({
+              extraOnly: true,
+              photoName: ep.name,
+              photoB64:  ep.b64,
+              photoMime: ep.mime,
+            }))
+          );
+          extraResults.forEach((res, i) => {
+            const ep = extrasSnapshot[i];
+            if (res.status === 'fulfilled' && res.value?.ok) {
+              console.log(`[form] ✅ Otro foto OK → ${ep.name} | ${res.value.driveFileId}`);
+            } else {
+              console.warn(`[form] ❌ Otro foto fallo → ${ep.name}`,
+                res.reason || res.value?.error);
+            }
           });
         }
 
-        // Si obtuvimos la URL, actualizamos el registro local ahora mismo
-        if (driveUrl) {
-          const idx = registros.findIndex(r => r.id === record.id);
-          if (idx !== -1) {
-            registros[idx].driveUrl    = driveUrl;
-            registros[idx].driveFileId = driveFileId;
-          }
-          photoSave(local, record.photoThumb, driveUrl);
-          saveLocal();
-        }
         updateSyncStatus('ok');
       } catch (err) {
+        console.error('[form] Error GAS:', err);
         updateSyncStatus('error');
       }
     })();
