@@ -106,10 +106,11 @@
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label class="fl" for="fEstac">Estacionamiento Pickup <span class="text-wr">*</span></label>
-          <select id="fEstac" class="fi">
+          <select id="fEstac" class="fi" onchange="toggleEstacNoPU()">
             <option value="">— Selecciona —</option>
             <option>Subterráneo</option>
             <option>En superficie</option>
+            <option value="No tengo PU en estacionamiento">No tengo PU en estacionamiento</option>
           </select>
         </div>
         <div>
@@ -476,8 +477,30 @@ function doPost(e) {
     return out({ ok: true, driveError: driveErr.message });
   }
 
-  Logger.log('[GAS] ── doPost completado OK ────────────────────────────');
-  return out({ ok: true, driveFileId: driveFileId, driveUrl: driveUrl });
+  Logger.log('[GAS] ── doPost completado OK ────────────────────────');
+
+  // 5. Subir fotos extra (sección "Otro") — sin crear nuevas filas en el Sheet
+  var extraFileIds = [];
+  if (data.extraPhotos && data.extraPhotos.length) {
+    var folder2 = getFolder();
+    data.extraPhotos.forEach(function(ep) {
+      try {
+        var eb    = Utilities.base64Decode(ep.b64);
+        var eBlob = Utilities.newBlob(eb, ep.mime || 'image/jpeg', ep.name);
+        var eFile = folder2.createFile(eBlob);
+        eFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        extraFileIds.push({ name: ep.name, id: eFile.getId(),
+          url: 'https://drive.google.com/uc?export=download&amp;id=' + eFile.getId() });
+        Logger.log('[GAS] ✅ Extra foto OK → ' + ep.name + ' | ' + eFile.getId());
+      } catch(eErr) {
+        Logger.log('[GAS] ❌ Extra foto fallo: ' + ep.name + ' | ' + eErr.message);
+        extraFileIds.push({ name: ep.name, error: eErr.message });
+      }
+    });
+  }
+
+  return out({ ok: true, driveFileId: driveFileId, driveUrl: driveUrl,
+               extraFiles: extraFileIds });
 }
 
 // ─ GET: ping / list / delete / deleteAll ─────────────────────────────────
@@ -1000,8 +1023,8 @@ function handleSubmit(e) {
   if (!currentPhoto)                      { flashDrop();         ok = false; }
   if (!ok) { showToast('⚠️ Revisa los campos obligatorios marcados en rojo', '#ea1100'); return; }
 
-  const uploadB64  = currentPhoto.uploadB64;   // listo desde processFile, sin async
-  const uploadName = currentPhoto.uploadName;  // nombre .jpg normalizado
+  const uploadB64  = currentPhoto.uploadB64;
+  const uploadName = `PU_${local}.jpg`;   // nomenclatura automática: PU_N°local
 
   const record = {
     id:          Date.now(),
@@ -1037,6 +1060,14 @@ function handleSubmit(e) {
           photoName: uploadName,
           photoB64:  uploadB64,   // JPEG full-res — va a Drive
           photoMime: 'image/jpeg',
+          // Fotos extra de sección "Otro" — nombradas Otro_N°local[_N]
+          extraPhotos: retiroOtroFotos
+            .filter(f => f !== null)
+            .map((f, i, arr) => ({
+              name: arr.length === 1 ? `Otro_${local}.jpg` : `Otro_${local}_${i + 1}.jpg`,
+              b64:  f.b64,
+              mime: f.mime,
+            })),
         };
 
         let driveUrl    = '';
@@ -1405,6 +1436,10 @@ function copyResponseCode() {
 function resetForNewSubmit() {
   document.getElementById('successScreen').classList.add('hidden');
   document.getElementById('popForm').classList.remove('hidden');
+  // Restaurar fNumEst si estaba bloqueado por "No tengo PU"
+  const numEst = document.getElementById('fNumEst');
+  numEst.disabled = false;
+  numEst.classList.remove('opacity-50', 'cursor-not-allowed');
   // Limpiar sección "Otro" de retiro
   document.getElementById('fRetiro').value = '';
   document.getElementById('retiroOtroSection').classList.add('hidden');
@@ -1477,6 +1512,17 @@ function generateHTML() {
   a.click();
   URL.revokeObjectURL(a.href);
   showToast('⬇️ HTML descargado — republica el link con share-puppy');
+}
+
+/* ─── Estacionamiento: No tengo PU ─── */
+function toggleEstacNoPU() {
+  const estac  = document.getElementById('fEstac').value;
+  const numEst = document.getElementById('fNumEst');
+  const noPU   = estac === 'No tengo PU en estacionamiento';
+  numEst.disabled = noPU;
+  numEst.classList.toggle('opacity-50', noPU);
+  numEst.classList.toggle('cursor-not-allowed', noPU);
+  if (noPU) numEst.value = '0';
 }
 
 /* ─── Retiro: Otro ─── */
