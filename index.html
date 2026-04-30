@@ -1399,18 +1399,40 @@ function deleteAllRecords() {
 
 function exportToExcel() {
   if (!registros.length) { showToast('⚠️ No hay registros para exportar', '#ea1100'); return; }
-  const rows = registros.map(r => ({
-    'Fecha': r.fecha, 'Local': r.local, 'Nombre encargado': r.nombre || '',
-    'Estacionamiento': r.estac, 'N° Estacionamientos': r.numEst,
-    'Gráfica': r.grafica, 'Lugar de retiro': r.retiro,
-    'Archivo foto': r.photoName, 'Drive URL': r.driveUrl || '',
-  }));
-  const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [18,10,22,16,20,22,28,20].map(w => ({ wch: w }));
+
+  // ── Hoja 1: Levantamientos realizados ────────────────────────────────
+  const ws1 = XLSX.utils.json_to_sheet(registros.map(r => ({
+    'Fecha':              r.fecha,
+    'Local':              r.local,
+    'Nombre encargado':  r.nombre   || '',
+    'Estacionamiento':   r.estac    || '',
+    'N° Estacionamientos': r.numEst  || 0,
+    'Gráfica':            r.grafica  || '',
+    'Lugar de retiro':   r.retiro   || '',
+    'Archivo foto':      r.photoName|| '',
+    'Drive URL':         r.driveUrl || '',
+  })));
+  ws1['!cols'] = [18,10,22,16,20,22,28,20,40].map(w => ({ wch: w }));
+
+  // ── Hoja 2: Locales pendientes ──────────────────────────────────
+  const levantados = new Set(registros.map(r => String(r.local)));
+  const pendientes = cfg.locales.length
+    ? cfg.locales.filter(l => !levantados.has(String(l)))
+    : [];
+
+  const pendRows = pendientes.length
+    ? pendientes.map(l => [l, 'Pendiente'])
+    : [['(Sin base de locales cargada)', '']];
+
+  const ws2 = XLSX.utils.aoa_to_sheet([['Local', 'Estado'], ...pendRows]);
+  ws2['!cols'] = [{ wch: 14 }, { wch: 16 }];
+
+  // ── Workbook ────────────────────────────────────────────
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Levantamiento');
+  XLSX.utils.book_append_sheet(wb, ws1, 'Levantamiento');
+  XLSX.utils.book_append_sheet(wb, ws2, 'Pendientes');
   XLSX.writeFile(wb, `Levantamiento_POP_${new Date().toISOString().slice(0,10)}.xlsx`);
-  showToast('📥 Excel exportado');
+  showToast(`📥 Excel exportado · ${pendientes.length} pendientes`);
 }
 
 /* ─── Código de respuesta ─── */
